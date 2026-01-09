@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobStatus {
+  UPLOADED
+  PAID
+  PRINTED
+  FAILED
+}
+
+enum ColorMode {
+  BW
+  COLOR
+}
+
+model Kiosk {
+  pi_id     String     @id
+  secret    String
+  location  String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  jobs      PrintJob[]
+}
+
+model PrintJob {
+  job_id         String     @id @default(uuid())
+  kiosk_id       String
+  page_count     Int
+  color_mode     ColorMode
+  status         JobStatus  @default(UPLOADED)
+  payable_amount Decimal    @db.Decimal(10, 2)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  kiosk      Kiosk       @relation(fields: [kiosk_id], references: [pi_id])
+  payment    Payment?
+  printToken PrintToken?
+}
+
+model Payment {
+  id                String   @id @default(uuid())
+  job_id            String   @unique
+  amount            Decimal  @db.Decimal(10, 2)
+  currency          String   @default("INR")
+  razorpay_order_id String   @unique
+  status            String   // razorpay status (captured, created, etc)
+  createdAt         DateTime @default(now())
+
+  job PrintJob @relation(fields: [job_id], references: [job_id])
+}
+
+model PrintToken {
+  id         String   @id @default(uuid())
+  job_id     String   @unique
+  token_hash String   @unique // Store hash to verify and prevent reuse if needed, or just existence
+  expires_at DateTime
+  used       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  job PrintJob @relation(fields: [job_id], references: [job_id])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  event     String
+  actor     String?  // 'kiosk:PI_123' or 'system' or 'admin'
+  metadata  Json?
+  timestamp DateTime @default(now())
+}
