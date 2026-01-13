@@ -29,7 +29,7 @@ export class PaymentsController {
             const order = await this.razorpayService.createOrder(
                 Number(job.payable_amount),
                 'INR',
-                `receipt_${job.job_id}`,
+                `rcpt_${job.job_id.substring(0, 30)}`,
             );
 
             // Create Payment Record (or update if exists)
