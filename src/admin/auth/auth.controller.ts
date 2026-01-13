@@ -17,4 +17,10 @@ export class AuthController {
         }
         return this.authService.login(user);
     }
+
+    @Post('manual-signup')
+    @ApiOperation({ summary: 'Manual Admin Creation (Recovery)' })
+    async manualSignup(@Body() body: any) {
+        return this.authService.createAdminUser(body);
+    }
 }

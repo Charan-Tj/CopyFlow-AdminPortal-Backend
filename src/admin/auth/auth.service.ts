@@ -25,4 +25,19 @@ export class AuthService {
             access_token: this.jwtService.sign(payload),
         };
     }
+
+    async createAdminUser(body: any) {
+        const salt = await bcrypt.genSalt();
+        const hash = await bcrypt.hash(body.password, salt);
+
+        return this.prisma.user.upsert({
+            where: { email: body.email },
+            update: { password_hash: hash },
+            create: {
+                email: body.email,
+                password_hash: hash,
+                role: 'ADMIN',
+            },
+        });
+    }
 }
