@@ -10,7 +10,7 @@ export class RazorpayService {
     constructor() {
         this.razorpay = new Razorpay({
             key_id: process.env.RAZORPAY_KEY_ID || 'test_key',
-            key_secret: process.env.RAZORPAY_SECRET || 'test_secret',
+            key_secret: process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET || 'test_secret',
         });
     }
 
