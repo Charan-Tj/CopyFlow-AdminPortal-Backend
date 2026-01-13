@@ -15,13 +15,26 @@ export class AdminController {
 
     @Get('jobs')
     @ApiOperation({ summary: 'List recent Print Jobs' })
-    getJobs(@Query('limit') limit?: string) {
-        return this.adminService.getAllJobs(Number(limit) || 20);
+    getJobs(
+        @Query('page') page?: number,
+        @Query('limit') limit?: number,
+        @Query('status') status?: string
+    ) {
+        return this.adminService.getAllJobs(Number(page) || 1, Number(limit) || 20, status);
     }
 
     @Get('audit-logs')
     @ApiOperation({ summary: 'List system Audit Logs' })
-    getAuditLogs(@Query('limit') limit?: string) {
-        return this.adminService.getAuditLogs(Number(limit) || 50);
+    getAuditLogs(
+        @Query('page') page?: number,
+        @Query('limit') limit?: number
+    ) {
+        return this.adminService.getAuditLogs(Number(page) || 1, Number(limit) || 50);
+    }
+
+    @Get('overview')
+    @ApiOperation({ summary: 'Get Dashboard Overview Statistics' })
+    getOverview() {
+        return this.adminService.getOverviewStats();
     }
 }

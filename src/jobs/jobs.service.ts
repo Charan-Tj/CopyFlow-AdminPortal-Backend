@@ -12,7 +12,7 @@ export class JobsService {
     ) { }
 
     async createJob(kioskId: string, dto: CreateJobDto) {
-        const payableAmount = this.pricingService.calculatePrice(
+        const payableAmount = await this.pricingService.calculatePrice(
             dto.page_count,
             dto.color_mode,
         );

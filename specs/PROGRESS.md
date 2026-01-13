@@ -1,53 +1,35 @@
-# Copy Flow Backend - Progress Tracker
+# Project Progress: Admin Control Plane
 
-## 🧩 PHASE 1: Foundation & Data Layer
-**Goal:** Initialize project, Dockerize DB, and apply schema.
-- [x] **Setup:** Initialize NestJS project.
-- [x] **Infra:** Create `docker-compose.yml` for PostgreSQL.
-- [x] **Schema:** Define Prisma models for:
-    - [x] `Kiosk` (pi_id, secret, location)
-    - [x] `PrintJob` (job_id, kiosk_id, pages, status, payable_amount)
-    - [x] `Payment` (job_id, amount, currency, status, razorpay_order_id)
-    - [x] `PrintToken` (job_id, token, expires_at, used)
-    - [x] `AuditLog` (event, actor, metadata, timestamp)
-- [x] **Action:** Run migrations and generate the Prisma client.
-- [x] **Deliverable:** Working server connecting to a local Docker Postgres.
+## 🚀 PHASE 1: Admin Authentication
+**Goal:** Secure the API and create the Login UI.
+- [x] **Backend:** Update Prisma Schema (User model).
+- [x] **Backend:** Implement AdminAuthGuard & JWT Strategy.
+- [x] **Backend:** Login Endpoint `POST /admin/auth/login`.
+- [x] **Backend:** Seed Root Admin.
+- [x] **Frontend:** Initialize Next.js App (`admin-dashboard`).
+- [x] **Frontend:** Login Page UI & Integration.
 
-## 🧩 PHASE 2: Logic & Pricing Engine
-**Goal:** Enable Kiosks to upload job metadata.
-- [x] **Endpoint:** `POST /kiosks/:pi_id/jobs`
-- [x] **Security:** Middleware to authenticate `pi_id` + `secret`.
-- [x] **Logic:**
-    - [x] Accept: `page_count`, `color_mode`.
-    - [x] Calculate price (e.g., 2 INR for BW, 10 INR for Color).
-    - [x] Create `PrintJob` (Status: `UPLOADED_NOT_PAID`).
-- [x] **Output:** Return `job_id` and `payable_amount`.
+## 🧩 PHASE 2: Dynamic Pricing Engine
+**Goal:** Move pricing from hardcoded values to Database control.
+- [x] **Backend:** Update Prisma (PricingConfig).
+- [x] **Backend:** Update `JobsService` to use dynamic pricing.
+- [x] **Backend:** Pricing Endpoints (GET/POST).
+- [x] **Frontend:** Pricing Dashboard Page.
 
-## 🧩 PHASE 3: Razorpay Integration (The Critical Path)
-**Goal:** Secure payment handling.
-- [x] **Service:** Create `RazorpayService` wrapper.
-- [x] **Endpoint:** `POST /jobs/:job_id/pay` -> Creates Razorpay Order -> Returns Order Details.
-- [x] **Webhook:** `POST /webhooks/razorpay`
-    - [x] Verify `x-razorpay-signature`.
-    - [x] Match `order_id` and `amount`.
-    - [x] Update `PrintJob` to `PAID`.
-    - [x] Create `Payment` record.
-    - [x] Log to `AuditLog`.
+## 🧩 PHASE 3: Kiosk Ops (Paper & Status)
+**Goal:** Manage hardware status.
+- [x] **Backend:** Update Kiosk Model (paper status).
+- [x] **Backend:** Refill Endpoint.
+- [x] **Frontend:** Kiosks Dashboard with Status & Actions.
 
-## 🧩 PHASE 4: The Token Bridge
-**Goal:** Generate offline-safe print tokens.
-- [ ] **Logic:** Generate HMAC-SHA256 token containing `{job_id, kiosk_id, exp}`.
-- [x] **Endpoint:** `GET /kiosks/:pi_id/jobs/:job_id/token`
-    - [x] Guard: `KioskAuthGuard`.
-    - [x] Logic: Verify `Job.status == PAID` and `Job.kiosk_id == Requesting Kiosk`.
-    - [x] Output: HMAC-SHA256 Signed Token `{ payload, signature }`.
-- [x] **Safety:** Ensure `PrintToken` record is created to track usage (idempotency foundation).
+## 🧩 PHASE 4: Operations & Audit
+**Goal:** Visibility into the system.
+- [x] **Backend:** Filterable Jobs Endpoint.
+- [x] **Frontend:** Audit Log Table.
+- [x] **Frontend:** Jobs History Table.
 
 ## 🧩 PHASE 5: Hardening & Admin
-**Goal:** Production readiness.
-- [x] **Audit:** `AuditLog` model tracks payments and job outcomes.
-- [x] **Admin API:**
-    - [x] `GET /admin/kiosks`: List details.
-    - [x] `GET /admin/jobs`: List recent jobs.
-    - [x] `GET /admin/audit-logs`: View history.
-- [x] **Docs:** Swagger UI available at `/api`.
+**Goal:** Final Polish.
+- [x] **Backend:** Overview Stats Endpoint.
+- [x] **Frontend:** Dashboard Overview Widgets.
+- [x] **Frontend:** Cleanup & Navigation.
