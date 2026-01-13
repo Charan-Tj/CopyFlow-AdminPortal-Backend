@@ -52,8 +52,8 @@ export class PaymentsController {
             return order;
         } catch (error) {
             // Log the error 
-            console.error(error);
-            throw new InternalServerErrorException('Failed to create payment order');
+            console.error('Razorpay Error:', error);
+            throw new InternalServerErrorException(error.message || 'Failed to create payment order');
         }
     }
 }
