@@ -9,8 +9,12 @@ async function bootstrap() {
     origin: [
       'http://localhost:3000',
       'http://localhost:3001',
+      'https://copy-flow-admin-portal-frontend.vercel.app',
       'https://copyflow-adminportal-frontend.vercel.app',
       'https://copyflow-adminportal.vercel.app',
+      'https://admin-dashboard-nu-three.vercel.app',
+      /https:\/\/.*-vercels-projects-.*\.vercel\.app/, // Vercel preview URLs
+      '*' // TEMPORARY DEBUG: Allow all to verify connection
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
