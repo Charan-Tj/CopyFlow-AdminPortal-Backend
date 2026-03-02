@@ -20,9 +20,13 @@ export class WhatsappService {
     private userSessions = new Map<string, ChatState>();
     private twilioClient: twilio.Twilio;
 
-    constructor(private readonly razorpayService: RazorpayService) {
-        // Initialize Twilio client
-        this.twilioClient = new twilio.Twilio(
+    constructor(private readonly razorpayService: RazorpayService) { }
+
+    private getTwilioClient(): twilio.Twilio {
+        // Load fresh variables directly to prevent stale Env context in Nest
+        require('dotenv').config();
+
+        return new twilio.Twilio(
             process.env.TWILIO_ACCOUNT_SID || 'ACtest',
             process.env.TWILIO_AUTH_TOKEN || 'testtoken'
         );
@@ -116,9 +120,10 @@ export class WhatsappService {
         this.userSessions.delete(to);
 
         try {
-            const fromNumber = process.env.TWILIO_PHONE_NUMBER || 'whatsapp:+14155238886'; // default Twilio sandbox number
+            const envFrom = process.env.TWILIO_PHONE_NUMBER || '+14155238886';
+            const fromNumber = envFrom.includes('whatsapp:') ? envFrom : `whatsapp:${envFrom}`;
 
-            await this.twilioClient.messages.create({
+            await this.getTwilioClient().messages.create({
                 body: "✅ Payment Confirmed! Your files have been sent to the printer.",
                 from: fromNumber,
                 to: to

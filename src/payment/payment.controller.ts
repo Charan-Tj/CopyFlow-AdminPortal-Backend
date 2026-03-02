@@ -39,12 +39,13 @@ export class PaymentController {
         this.logger.log(`Webhook Event Validated: ${event}`);
 
         // Process payment validation and confirm print job
-        if (event === 'payment.captured' || event === 'payment_link.paid') {
+        // We only trigger off 'payment_link.paid' because 'payment.captured' also fires for link payments causing duplicate notifications
+        if (event === 'payment_link.paid') {
             const paymentPayload = bodyObj.payload.payment ? bodyObj.payload.payment.entity : null;
             const paymentLinkPayload = bodyObj.payload.payment_link ? bodyObj.payload.payment_link.entity : null;
 
             // For explicitly created orders, we use order_id. For payment links, we use reference_id
-            const orderId = paymentPayload?.order_id || paymentLinkPayload?.reference_id || 'unknown_order';
+            const orderId = paymentLinkPayload?.reference_id || paymentPayload?.order_id || 'unknown_order';
 
             this.logger.log(`Triggering print for Order/Reference ID: ${orderId}`);
 
