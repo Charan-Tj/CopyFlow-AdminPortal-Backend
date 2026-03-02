@@ -48,14 +48,15 @@ export class PaymentService {
             // Provide mock values or actual DB relationships to actual print documents 
         };
 
-        // Forward to remote Pi CUPS HTTP Server
-        const printSuccess = await this.printService.sendJobToPrinter(jobData);
+        // Forward to remote Pi CUPS HTTP Server (Bypassed for now)
+        // const printSuccess = await this.printService.sendJobToPrinter(jobData);
+        const printSuccess = true;
 
         // Attempt to extract sender contact phone from payment payload if provided
         const customerPhone = paymentDetails?.contact || paymentDetails?.customer?.contact || 'whatsapp:+919999999999';
 
         if (printSuccess) {
-            this.logger.log(`Print job successfully triggered for order: ${orderId}`);
+            this.logger.log(`Print job successfully triggered (mocked) for order: ${orderId}`);
             await this.whatsappService.tellStudentJobIsPrinting(customerPhone);
         } else {
             this.logger.error(`Failed to trigger print job for order: ${orderId}`);
