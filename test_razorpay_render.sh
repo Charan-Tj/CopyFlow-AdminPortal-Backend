@@ -1,7 +1,7 @@
 #!/bin/bash
 # test_razorpay_render.sh
 # Usage: ./test_razorpay_render.sh <YOUR_RENDER_URL>
-# Example: ./test_razorpay_render.sh https://copyflow-api.onrender.com
+# Example: ./test_razorpay_render.sh https://copyflow-adminportal-backend.onrender.com
 
 BASE_URL=$1
 

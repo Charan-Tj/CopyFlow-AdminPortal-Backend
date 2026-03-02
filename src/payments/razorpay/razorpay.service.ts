@@ -23,6 +23,29 @@ export class RazorpayService {
         return this.razorpay.orders.create(options);
     }
 
+    async createPaymentLink(amount: number, referenceId: string, description: string, customerPhone: string) {
+        const options = {
+            amount: Math.round(amount * 100), // Amount in paise
+            currency: 'INR',
+            accept_partial: false,
+            reference_id: referenceId,
+            description: description,
+            customer: {
+                contact: customerPhone,
+            },
+            notify: {
+                sms: true,
+                email: false,
+            },
+            reminder_enable: true,
+            notes: {
+                source: 'WhatsApp_Bot',
+            }
+        };
+
+        return this.razorpay.paymentLink.create(options);
+    }
+
     verifyWebhookSignature(body: string, signature: string): boolean {
         const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
         if (!secret) {
