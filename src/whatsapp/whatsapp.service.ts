@@ -1,13 +1,14 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { RazorpayService } from '../payments/razorpay/razorpay.service';
-import * as twilio from 'twilio';
 import axios from 'axios';
 import * as mammoth from 'mammoth';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
+import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
+import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 const pdfParse = require('pdf-parse');
 
 interface ChatState {
-    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT';
+    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW';
     fileUrl?: string;
     pages?: number;
     copies?: number;
@@ -17,175 +18,34 @@ interface ChatState {
     paymentLink?: string;
     jobId?: string;
     sender?: string;
+    useFlow?: boolean;
 }
 
 @Injectable()
-export class WhatsappService implements OnModuleInit {
+export class WhatsappService {
     private readonly logger = new Logger(WhatsappService.name);
 
     private userSessions = new Map<string, ChatState>();
-    private twilioClient: twilio.Twilio;
-
-    private copiesTemplateSid: string;
-    private colorTemplateSid: string;
-    private sidesTemplateSid: string;
 
     constructor(
         private readonly razorpayService: RazorpayService,
-        private readonly supabaseStorage: SupabaseStorageService
+        private readonly supabaseStorage: SupabaseStorageService,
+        @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider
     ) { }
 
-    async onModuleInit() {
-        await this.initTemplates();
-    }
-
-    private getTwilioClient(): twilio.Twilio {
-        require('dotenv').config();
-        return new twilio.Twilio(
-            process.env.TWILIO_ACCOUNT_SID || 'ACtest',
-            process.env.TWILIO_AUTH_TOKEN || 'testtoken'
-        );
-    }
-
-    private async initTemplates() {
-        const client = this.getTwilioClient();
-        try {
-            const contents = await client.content.v1.contents.list();
-
-            const copies = contents.find(c => c.friendlyName === 'cf_copies_list');
-            if (copies) {
-                this.copiesTemplateSid = copies.sid;
-            } else {
-                const newTpl = await client.content.v1.contents.create({
-                    friendlyName: 'cf_copies_list',
-                    language: 'en',
-                    types: {
-                        'twilio/list-picker': {
-                            body: 'How many copies of this document would you like?',
-                            button: 'Select Copies',
-                            items: [
-                                { id: 'copies_1', item: '1 Copy', description: 'One copy' },
-                                { id: 'copies_2', item: '2 Copies', description: 'Two copies' },
-                                { id: 'copies_3', item: '3 Copies', description: 'Three copies' },
-                                { id: 'copies_other', item: 'Other', description: 'A different amount' }
-                            ]
-                        }
-                    } as any
-                });
-                this.copiesTemplateSid = newTpl.sid;
-            }
-
-            const color = contents.find(c => c.friendlyName === 'cf_color_quickrep');
-            if (color) {
-                this.colorTemplateSid = color.sid;
-            } else {
-                const newTpl = await client.content.v1.contents.create({
-                    friendlyName: 'cf_color_quickrep',
-                    language: 'en',
-                    types: {
-                        'twilio/quick-reply': {
-                            body: 'What type of print do you want?',
-                            actions: [
-                                { id: 'bw', title: 'Black & White ₹2/page'.substring(0, 20) }, // Prevent > 20 chars Whatsapp restriction
-                                { id: 'color', title: 'Color ₹10/page' }
-                            ]
-                        }
-                    } as any
-                });
-                this.colorTemplateSid = newTpl.sid;
-            }
-
-            const sides = contents.find(c => c.friendlyName === 'cf_sides_quickrep');
-            if (sides) {
-                this.sidesTemplateSid = sides.sid;
-            } else {
-                const newTpl = await client.content.v1.contents.create({
-                    friendlyName: 'cf_sides_quickrep',
-                    language: 'en',
-                    types: {
-                        'twilio/quick-reply': {
-                            body: 'Would you like single-sided or double-sided printing?',
-                            actions: [
-                                { id: 'single', title: 'Single Sided' },
-                                { id: 'double', title: 'Double Sided' }
-                            ]
-                        }
-                    } as any
-                });
-                this.sidesTemplateSid = newTpl.sid;
-            }
-
-            this.logger.log('Twilio Content API Templates initialized successfully.');
-        } catch (e) {
-            this.logger.error(`Failed to init templates: ${e.message}`);
-            // Sometimes free/test accounts cant use content API fully, suppress error
-        }
-    }
-
     private async sendContentMessage(to: string, contentSid: string, variables: any = {}) {
-        if (!contentSid) {
-            this.logger.error('Content SID is not available. Ensure Twilio templates initialized properly.');
-            await this.sendTextMessage(to, "Please select an option. (Interactive menus are currently unavailable, reply manually instead)");
-            return;
-        }
-
-        const client = this.getTwilioClient();
-        const envFrom = process.env.TWILIO_PHONE_NUMBER || '+14155238886';
-        const from = envFrom.includes('whatsapp:') ? envFrom : `whatsapp:${envFrom}`;
-
-        await client.messages.create({
-            contentSid: contentSid,
-            from,
-            contentVariables: JSON.stringify(variables),
-            to: to.includes('whatsapp:') ? to : `whatsapp:${to}`,
-        });
+        await this.whatsappProvider.sendContentMessage(to, contentSid, variables);
     }
 
     private async sendTextMessage(to: string, body: string) {
-        const client = this.getTwilioClient();
-        const envFrom = process.env.TWILIO_PHONE_NUMBER || '+14155238886';
-        const from = envFrom.includes('whatsapp:') ? envFrom : `whatsapp:${envFrom}`;
-
-        await client.messages.create({
-            body,
-            from,
-            to: to.includes('whatsapp:') ? to : `whatsapp:${to}`,
-        });
+        await this.whatsappProvider.sendTextMessage(to, body);
     }
 
     /**
-     * Sends a WhatsApp Typing indicator. 
-     * Since native Twilio SDK doesn't wrap whatsapp sender-actions smoothly, we fire an raw HTTP POST to Twilio Messages API
-     * https://developers.facebook.com/documentation/business-messaging/whatsapp/typing-indicators
+     * Sends a WhatsApp Typing indicator via the provider abstraction
      */
     private async sendTypingIndicator(to: string) {
-        const sid = process.env.TWILIO_ACCOUNT_SID;
-        const token = process.env.TWILIO_AUTH_TOKEN;
-        if (!sid || !token) return;
-
-        const auth = Buffer.from(`${sid}:${token}`).toString('base64');
-        const envFrom = process.env.TWILIO_PHONE_NUMBER || '+14155238886';
-
-        const fromParam = envFrom.includes('whatsapp:') ? envFrom : `whatsapp:${envFrom}`;
-        const toParam = to.includes('whatsapp:') ? to : `whatsapp:${to}`;
-
-        try {
-            const formData = new URLSearchParams();
-            formData.append('To', toParam);
-            formData.append('From', fromParam);
-            // 'typing_on' tells Facebook/Meta graph to display the ... to the user
-            formData.append('MessagingBinding.Action', 'typing_on');
-
-            await axios.post(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, formData, {
-                headers: {
-                    'Authorization': `Basic ${auth}`,
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                validateStatus: null // Suppress crashing on limits secretly
-            });
-        } catch (err) {
-            this.logger.debug(`Failed to send typing indicator: ${err.message}`);
-        }
+        await this.whatsappProvider.sendTypingIndicator(to);
     }
 
     private async getPageCount(mediaUrl: string, mediaContentType?: string): Promise<{ pages: number; supabaseUrl?: string; bufferLocation?: string; }> {
@@ -239,7 +99,7 @@ export class WhatsappService implements OnModuleInit {
         }
     }
 
-    async handleIncomingMessage(sender: string, message: string, mediaUrl?: string, mediaContentType?: string): Promise<string | null> {
+    async handleIncomingMessage(sender: string, message: string, mediaUrl?: string, mediaContentType?: string, interactiveData?: any): Promise<string | null> {
         this.logger.log(`Received message from ${sender}: ${message}`);
 
         let session = this.userSessions.get(sender);
@@ -252,7 +112,36 @@ export class WhatsappService implements OnModuleInit {
         const normalizedMessage = message.trim().toLowerCase();
 
         try {
+            // Check for InteractiveData payload first
+            if (interactiveData && session.step === 'AWAITING_FLOW') {
+                this.logger.log(`Received Interactive Flow Response: ${JSON.stringify(interactiveData)}`);
+
+                // Assuming interactiveData looks like: { data: { copies: "2", color: "false", sides: "double" } }
+                const flowInput = interactiveData.data || {};
+                session.copies = flowInput.copies ? parseInt(flowInput.copies, 10) : 1;
+                session.color = flowInput.color === 'true' || flowInput.color === true;
+                session.sides = flowInput.sides === 'double' ? 'double' : 'single';
+
+                // Skip ahead directly to AWAITING_SIDES processing logic to generate payment link cleanly
+                session.step = 'AWAITING_SIDES';
+                // Jump to that block immediately by omitting the 'return null' here
+                // We'll actually construct a helper call or just let it fall through 
+                // Wait, it is cleaner to just run the pricing math here manually rather than falling through.
+                const pricePerPage = session.color ? 10 : 2;
+                session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
+
+                session.step = 'AWAITING_PAYMENT';
+                return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
+            }
+
             if (session.step === 'AWAITING_FILE') {
+                if (normalizedMessage === 'hi-flow') {
+                    session.useFlow = true;
+                    await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, "Interactive Flow mode activated! Please upload your document to begin.");
+                    return null;
+                }
+
                 if (mediaUrl) {
                     await this.sendTypingIndicator(sender);
                     await this.sendTextMessage(sender, "Analyzing your document...");
@@ -268,16 +157,26 @@ export class WhatsappService implements OnModuleInit {
                         session.fileUrl = mediaUrl; // Fallback to raw Twilio URL if upload fails
                     }
 
+                    if (session.useFlow) {
+                        session.step = 'AWAITING_FLOW';
+                        await this.sendTypingIndicator(sender);
+                        // Send the interactive flow template/prompt here. 
+                        // Note: For Twilio Sandbox without a configured meta template, this is just a simulated instruction.
+                        await this.sendTextMessage(sender, "Please open the Interactive Print Form that normally appears here, select your settings, and submit.");
+                        // NATIVE WhatsApp FLow API Template: await this.sendContentMessage(sender, 'cf_native_flow_template');
+                        return null;
+                    }
+
                     session.step = 'AWAITING_COPIES';
                     await this.sendTypingIndicator(sender);
-                    await this.sendContentMessage(sender, this.copiesTemplateSid);
+                    await this.sendContentMessage(sender, 'cf_copies_list');
                     return null;
                 }
 
                 // If it's the very first message
                 try {
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, 'Welcome to CopyFlow! Please send a file (PDF/Word/image) to get started.');
+                    await this.sendTextMessage(sender, 'Welcome to CopyFlow! Please send a file (PDF/Word/image) to get started. \n\n(Tip: Type "hi-flow" to enable the experimental WhatsApp Flow mode)');
                     return null;
                 } catch (err) {
                     this.logger.error(`Hit Twilio Limit: ${err.message}. Falling back to normal XML.`);
@@ -310,7 +209,7 @@ export class WhatsappService implements OnModuleInit {
                 session.copies = copies;
                 session.step = 'AWAITING_COLOR';
                 await this.sendTypingIndicator(sender);
-                await this.sendContentMessage(sender, this.colorTemplateSid);
+                await this.sendContentMessage(sender, 'cf_color_quickrep');
                 return null;
             }
 
@@ -321,13 +220,13 @@ export class WhatsappService implements OnModuleInit {
                     session.color = false;
                 } else {
                     await this.sendTypingIndicator(sender);
-                    await this.sendContentMessage(sender, this.colorTemplateSid);
+                    await this.sendContentMessage(sender, 'cf_color_quickrep');
                     return null;
                 }
 
                 session.step = 'AWAITING_SIDES';
                 await this.sendTypingIndicator(sender);
-                await this.sendContentMessage(sender, this.sidesTemplateSid);
+                await this.sendContentMessage(sender, 'cf_sides_quickrep');
                 return null;
             }
 
@@ -338,7 +237,7 @@ export class WhatsappService implements OnModuleInit {
                     session.sides = 'single';
                 } else {
                     await this.sendTypingIndicator(sender);
-                    await this.sendContentMessage(sender, this.sidesTemplateSid);
+                    await this.sendContentMessage(sender, 'cf_sides_quickrep');
                     return null;
                 }
 
@@ -346,48 +245,7 @@ export class WhatsappService implements OnModuleInit {
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
 
                 session.step = 'AWAITING_PAYMENT';
-
-                try {
-                    this.logger.log(`Starting to create Razorpay link. Price: ${session.price}, Color: ${session.color}, Sides: ${session.sides}`);
-                    const referenceId = `wa_${Date.now()}`;
-                    session.jobId = referenceId;
-                    session.sender = sender;
-                    const cleanedPhone = sender.replace('whatsapp:', '');
-                    this.logger.log(`Cleaned phone: ${cleanedPhone}`);
-
-                    await this.sendTypingIndicator(sender);
-                    this.logger.log('Creating payment link via razorpayService...');
-                    const isColorStr = session.color ? 'Color' : 'Black and White';
-                    const paymentLinkObj = await this.razorpayService.createPaymentLink(
-                        session.price,
-                        referenceId,
-                        `Print job (${session.copies || 1}x ${session.sides} ${isColorStr})`,
-                        cleanedPhone
-                    );
-                    this.logger.log(`Created payment link: ${paymentLinkObj.short_url}`);
-
-                    session.paymentLink = paymentLinkObj.short_url;
-
-                    const msg = `Your document has ${session.pages || 1} pages.\nTotal: ${session.pages || 1} pages x ${session.copies || 1} copies x Rs. ${pricePerPage} = Rs. ${session.price}\n\nPlease pay here to confirm your job: ${session.paymentLink}\n\nWe will start printing once payment is confirmed.`;
-                    try {
-                        await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, msg);
-                        return null;
-                    } catch (err) {
-                        return msg;
-                    }
-                } catch (error: any) {
-                    const errorMsg = error?.error?.description || error?.message || 'Unknown Razorpay error';
-                    this.logger.error(`Error creating Razorpay payment link: ${errorMsg}`);
-                    try {
-                        await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, 'Sorry, there was an issue generating your payment link. Please try again later.');
-                        return null;
-                    } catch (err) {
-                        return 'Sorry, there was an issue generating your payment link. Please try again later.';
-                    }
-                }
-                return null;
+                return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
             }
 
             if (session.step === 'AWAITING_PAYMENT') {
@@ -408,14 +266,51 @@ export class WhatsappService implements OnModuleInit {
             } catch (err) {
                 return 'How can I help you?';
             }
-        } catch (globalError) {
-            // If ANY twilio API call fails because of rate limiting
-            const errStr = globalError as any;
-            if (errStr && errStr.code === 63038) {
-                this.logger.warn(`WhatsApp Rate limit hit inside function. Attempting TwiML response fallback`);
-                return "Twilio API Limit reached. (Please wait or use another account).";
-            }
+        } catch (globalError: any) {
+            this.logger.error(`Error processing message: ${globalError.message}`);
+            // Let the caller (Bull queue processor) handle failures
             throw globalError;
+        }
+    }
+
+    private async createRazorpayLinkAndNotify(session: ChatState, sender: string, pricePerPage: number): Promise<string | null> {
+        try {
+            this.logger.log(`Starting to create Razorpay link. Price: ${session.price}, Color: ${session.color}, Sides: ${session.sides}`);
+            const referenceId = `wa_${Date.now()}`;
+            session.jobId = referenceId;
+            session.sender = sender;
+            const cleanedPhone = sender.replace('whatsapp:', '');
+
+            await this.sendTypingIndicator(sender);
+            this.logger.log('Creating payment link via razorpayService...');
+            const isColorStr = session.color ? 'Color' : 'Black and White';
+            const paymentLinkObj = await this.razorpayService.createPaymentLink(
+                session.price as number,
+                referenceId,
+                `Print job (${session.copies || 1}x ${session.sides} ${isColorStr})`,
+                cleanedPhone
+            );
+
+            session.paymentLink = paymentLinkObj.short_url;
+
+            const msg = `Your document has ${session.pages || 1} pages.\nTotal: ${session.pages || 1} pages x ${session.copies || 1} copies x Rs. ${pricePerPage} = Rs. ${session.price}\n\nPlease pay here to confirm your job: ${session.paymentLink}\n\nWe will start printing once payment is confirmed.`;
+            try {
+                await this.sendTypingIndicator(sender);
+                await this.sendTextMessage(sender, msg);
+                return null;
+            } catch (err) {
+                return msg;
+            }
+        } catch (error: any) {
+            const errorMsg = error?.error?.description || error?.message || 'Unknown Razorpay error';
+            this.logger.error(`Error creating Razorpay payment link: ${errorMsg}`);
+            try {
+                await this.sendTypingIndicator(sender);
+                await this.sendTextMessage(sender, 'Sorry, there was an issue generating your payment link. Please try again later.');
+                return null;
+            } catch (err) {
+                return 'Sorry, there was an issue generating your payment link. Please try again later.';
+            }
         }
     }
 
@@ -451,10 +346,10 @@ export class WhatsappService implements OnModuleInit {
 
         try {
             await this.sendTextMessage(to, "✅ Payment Confirmed! Your files have been sent to the printer.");
-            this.logger.log(`Successfully sent confirmation via Twilio to ${to}`);
+            this.logger.log(`Successfully sent confirmation via WhatsApp to ${to}`);
             return true;
-        } catch (error) {
-            this.logger.error(`Failed to send WhatsApp confirmation via Twilio. Check Twilio credentials. Error: ${error.message}`);
+        } catch (error: any) {
+            this.logger.error(`Failed to send WhatsApp confirmation. Error: ${error.message}`);
             return false;
         }
     }

@@ -7,6 +7,7 @@ import urllib.request
 import time
 import sys
 import os
+import threading
 
 PORT = 6310
 
@@ -34,6 +35,46 @@ def animate_progress():
         time.sleep(0.3)
     print("\n\033[92m✅ Print Complete!\033[0m\n")
 
+def process_job(job_details):
+    print("\n\033[93mNew Print Job Received:\033[0m")
+    
+    # File download simulation
+    file_url = job_details.get('fileUrl')
+    if file_url:
+        print(f"📥 Mock downloading file from: {file_url}")
+        try:
+            # Attempt actual download
+            req = urllib.request.Request(file_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                content = response.read()
+                print(f"✅ Downloaded {len(content)} bytes")
+        except Exception as e:
+            print(f"⚠️ Mock download warning: {e}")
+    else:
+        print("⚠️ No fileUrl provided in job mapping.")
+    
+    # Mock Processing
+    time.sleep(1) 
+    
+    print_box(job_details)
+    animate_progress()
+    
+    # Send ack back to NestJS Backend
+    job_id = job_details.get('jobId')
+    if not job_id:
+        print("❌ No jobId provided, cannot send acknowledgment.")
+        return
+        
+    ack_url = "http://localhost:3000/print/acknowledge"
+    ack_data = json.dumps({"jobId": job_id, "status": "completed"}).encode('utf-8')
+    req = urllib.request.Request(ack_url, data=ack_data, headers={'Content-Type': 'application/json'})
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            print(f"📨 Sent Acknowledgment to {ack_url}: HTTP \033[92m{response.getcode()}\033[0m")
+    except Exception as e:
+        print(f"❌ Failed to send Acknowledgment: {e}")
+
 class PrinterHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/print':
@@ -49,45 +90,9 @@ class PrinterHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "accepted"}).encode('utf-8'))
                 
-                print("\n\033[93mNew Print Job Received:\033[0m")
+                # Start job processing in background thread
+                threading.Thread(target=process_job, args=(job_details,), daemon=True).start()
                 
-                # File download simulation
-                file_url = job_details.get('fileUrl')
-                if file_url:
-                    print(f"📥 Mock downloading file from: {file_url}")
-                    try:
-                        # Attempt actual download
-                        req = urllib.request.Request(file_url, headers={'User-Agent': 'Mozilla/5.0'})
-                        with urllib.request.urlopen(req, timeout=5) as response:
-                            content = response.read()
-                            print(f"✅ Downloaded {len(content)} bytes")
-                    except Exception as e:
-                        print(f"⚠️ Mock download warning: {e}")
-                else:
-                    print("⚠️ No fileUrl provided in job mapping.")
-                
-                # Mock Processing
-                time.sleep(1) 
-                
-                print_box(job_details)
-                animate_progress()
-                
-                # Send ack back to NestJS Backend
-                job_id = job_details.get('jobId')
-                if not job_id:
-                    print("❌ No jobId provided, cannot send acknowledgment.")
-                    return
-                    
-                ack_url = "http://localhost:3000/print/acknowledge"
-                ack_data = json.dumps({"jobId": job_id, "status": "completed"}).encode('utf-8')
-                req = urllib.request.Request(ack_url, data=ack_data, headers={'Content-Type': 'application/json'})
-                
-                try:
-                    with urllib.request.urlopen(req) as response:
-                        print(f"📨 Sent Acknowledgment to {ack_url}: HTTP \033[92m{response.getcode()}\033[0m")
-                except Exception as e:
-                    print(f"❌ Failed to send Acknowledgment: {e}")
-                    
             except json.JSONDecodeError:
                 self.send_response(400)
                 self.end_headers()

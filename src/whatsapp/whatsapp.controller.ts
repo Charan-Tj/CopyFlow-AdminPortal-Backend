@@ -1,50 +1,43 @@
-import { Controller, Post, Body, Header, Logger } from '@nestjs/common';
-import { WhatsappService } from './whatsapp.service';
+import { Controller, Post, Body, Header, Logger, Inject } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bull';
+import type { Queue } from 'bull';
+import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
+import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 
 @Controller('whatsapp')
 export class WhatsappController {
   private readonly logger = new Logger(WhatsappController.name);
 
-  constructor(private readonly whatsappService: WhatsappService) { }
+  constructor(
+    @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider,
+    @InjectQueue('whatsapp-messages') private readonly whatsappQueue: Queue
+  ) { }
 
   /**
-   * Controller for Twilio WhatsApp Webhook
-   * Accepts POST requests and interacts with the WhatsappService to handle the conversation
+   * Controller for WhatsApp Webhook
+   * Accepts POST requests and interacts with BullMQ for async processing
    */
   @Post()
   @Header('Content-Type', 'text/xml')
-  async handleIncomingTwilioMessage(@Body() body: any) {
-    this.logger.log('Received webhook from Twilio');
+  async handleIncomingMessage(@Body() body: any) {
+    this.logger.log('Received webhook from WhatsApp Provider');
 
-    // Twilio sends application/x-www-form-urlencoded data to the webhook
-    const sender = body.From;
-    const bodyText = body.Body;
-    const numMedia = parseInt(body.NumMedia, 10) || 0;
+    // Parse the payload depending on the provider (Twilio, Meta, etc.)
+    const parsedData = this.whatsappProvider.parseIncomingWebhook(body);
 
-    let mediaUrl;
-    let mediaContentType;
-    if (numMedia > 0) {
-      mediaUrl = body.MediaUrl0;
-      mediaContentType = body.MediaContentType0;
+    if (parsedData.sender) {
+      // Enqueue the job for instant webhook 200 OK response
+      await this.whatsappQueue.add('process-incoming', parsedData, {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 }
+      });
+      this.logger.log(`Added message from ${parsedData.sender} to processing queue`);
+    } else {
+      this.logger.warn('Failed to parse webhook payload or sender missing');
     }
 
-    const responseMessage = await this.whatsappService.handleIncomingMessage(
-      sender,
-      bodyText || '',
-      mediaUrl,
-      mediaContentType
-    );
-
-    if (!responseMessage) {
-      return `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`.trim();
-    }
-
-    // Return TwiML XML response as required by Twilio API format
-    return `
-      <?xml version="1.0" encoding="UTF-8"?>
-      <Response>
-        <Message>${responseMessage}</Message>
-      </Response>
-    `.trim();
+    // Return empty TwiML or 200 OK equivalent to prevent provider timeouts. 
+    // This is required for Twilio, and successfully returns 200 OK for standard JSON APIs like Meta.
+    return `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`.trim();
   }
 }
