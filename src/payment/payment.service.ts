@@ -39,27 +39,32 @@ export class PaymentService {
     async processPaymentAndTriggerPrint(orderId: string, paymentDetails: any): Promise<void> {
         this.logger.log(`Processing confirmed webhook payment for Razorpay order: ${orderId}`);
 
-        // Simulate pulling job details and associating to printer
-        const jobData = {
-            orderId,
-            paymentDetails,
-            status: 'PAID',
-            timestamp: new Date().toISOString(),
-            // Provide mock values or actual DB relationships to actual print documents 
-        };
-
-        // Forward to remote Pi CUPS HTTP Server (Bypassed for now)
-        // const printSuccess = await this.printService.sendJobToPrinter(jobData);
-        const printSuccess = true;
-
         // Attempt to extract sender contact phone from payment payload if provided
         const customerPhone = paymentDetails?.contact || paymentDetails?.customer?.contact || 'whatsapp:+919999999999';
+        const sender = customerPhone.includes('whatsapp:') ? customerPhone : `whatsapp:${customerPhone}`;
 
-        if (printSuccess) {
-            this.logger.log(`Print job successfully triggered (mocked) for order: ${orderId}`);
-            await this.whatsappService.tellStudentJobIsPrinting(customerPhone);
+        const session = this.whatsappService.getSession(sender);
+
+        if (session) {
+            const jobData = {
+                fileUrl: session.fileUrl,
+                copies: session.copies,
+                color: session.color,
+                sides: session.sides,
+                jobId: session.jobId || `wa_${Date.now()}`,
+                sender: sender
+            };
+
+            const printSuccess = await this.printService.sendJobToPrinter(jobData);
+
+            if (printSuccess) {
+                this.logger.log(`Print job successfully triggered for order: ${orderId}`);
+                // Note: We don't tellStudentJobIsPrinting here anymore. The printer's explicit Acknowledge endpoint handles it.
+            } else {
+                this.logger.error(`Failed to trigger print job for order: ${orderId}`);
+            }
         } else {
-            this.logger.error(`Failed to trigger print job for order: ${orderId}`);
+            this.logger.warn(`Could not find active whatsapp session for sender: ${sender}`);
         }
     }
 }
