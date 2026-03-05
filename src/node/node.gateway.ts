@@ -49,15 +49,15 @@ export class NodeGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @SubscribeMessage('vitals')
     async handleVitals(@ConnectedSocket() client: Socket, @MessageBody() data: any) {
         const nodeId = client.data.nodeId;
-        const { paperlevel = 'HIGH', printerStatus = 'ONLINE', printerModel = 'UNKNOWN' } = data;
-        await this.nodeService.updateHeartbeat(nodeId, paperlevel, printerStatus, printerModel);
+        const { paperlevel = 'HIGH', printers = [] } = data;
+        await this.nodeService.updateHeartbeat(nodeId, paperlevel, printers);
     }
 
     @UseGuards(NodeAuthGuard)
     @SubscribeMessage('heartbeat')
     async handleHeartbeat(@ConnectedSocket() client: Socket) {
         const nodeId = client.data.nodeId;
-        await this.nodeService.updateHeartbeat(nodeId, 'HIGH', 'ONLINE', 'UNKNOWN');
+        await this.nodeService.updateHeartbeat(nodeId, 'HIGH', []);
     }
 
     @UseGuards(NodeAuthGuard)
@@ -69,9 +69,9 @@ export class NodeGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     @UseGuards(NodeAuthGuard)
     @SubscribeMessage('job-failed')
-    async handleJobFailed(@ConnectedSocket() client: Socket, @MessageBody() data: { jobId: string, reason: string }) {
+    async handleJobFailed(@ConnectedSocket() client: Socket, @MessageBody() data: { jobId: string, reason: string, errorCode?: string }) {
         const nodeId = client.data.nodeId;
-        await this.nodeService.failJob(nodeId, data.jobId, data.reason);
+        await this.nodeService.failJob(nodeId, data.jobId, data.reason, data.errorCode);
     }
 
     // Helper for backend to push events to specific node
