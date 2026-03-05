@@ -1,0 +1,63 @@
+graph TD
+    %% Define User Entities
+    UserClient[User Mobile Device]
+    Admin[Admin/Operator]
+
+    %% External Systems
+    Razorpay[Razorpay Payment Gateway]
+    ChatAPI[Twilio / Meta / Telegram API]
+
+    %% Frontend & Kiosk
+    subgraph "Frontend Layer"
+        AdminUI[Next.js Admin Dashboard]
+        Kiosk[Raspberry Pi IoT Kiosk]
+    end
+
+    %% NestJS Backend (Control Plane)
+    subgraph "NestJS Backend API (Admin Portal)"
+        direction TB
+        Auth[Auth Module <br> Passport/JWT]
+        AdminMod[Admin & Jobs Module]
+        PaymentMod[Payment Module]
+        WhatsappMod[Whatsapp / Chatbot Module]
+        PrintMod[Print Module]
+        StorageMod[Storage Module / Local Disk]
+
+        %% Database Orchestration
+        Prisma[Prisma ORM]
+    end
+
+    %% PostgreSQL DB
+    subgraph "PostgreSQL Database"
+        DB[(PostgreSQL)]
+    end
+
+    %% Connections
+    Admin -->|Login & View Metrics| AdminUI
+    AdminUI -->|RESTly Polling| Auth
+    AdminUI -->|Fetch Stats / Audit| AdminMod
+    
+    UserClient <-->|Sends PDF & Messages| ChatAPI
+    ChatAPI <-->|Webhooks / Payload| WhatsappMod
+    
+    WhatsappMod -->|Extracts Specs & Queues| StorageMod
+    WhatsappMod -->|Calculates Price| Prisma
+    WhatsappMod <-->|Generates Link| PaymentMod
+    
+    UserClient -->|"Pays for Job"| Razorpay
+    Razorpay -->|"Webhook (Payment Success)"| PaymentMod
+    
+    PaymentMod -->|Generates Print Token & Marks Paid| Prisma
+    PaymentMod -->|Notifies Success| WhatsappMod
+    
+    UserClient -->|Enters Print Token / Passcode| Kiosk
+    Kiosk -->|Validates Token| PrintMod
+    Kiosk -->|"Sends Heartbeat (Paper Levels)"| PrintMod
+    
+    PrintMod -->|Verify & Return Document| StorageMod
+    PrintMod -->|Update Job to PRINTED| Prisma
+    
+    AdminMod --> Prisma
+    Auth --> Prisma
+    
+    Prisma <--> DB

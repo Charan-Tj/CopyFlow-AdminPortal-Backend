@@ -1,8 +1,11 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Query, UseGuards } from '@nestjs/common';
 import { AdminService } from './admin.service';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 
 @ApiTags('Admin')
+@ApiBearerAuth()
+@UseGuards(AdminAuthGuard)
 @Controller('admin')
 export class AdminController {
     constructor(private readonly adminService: AdminService) { }
@@ -36,5 +39,29 @@ export class AdminController {
     @ApiOperation({ summary: 'Get Dashboard Overview Statistics' })
     getOverview() {
         return this.adminService.getOverviewStats();
+    }
+
+    @Patch('jobs/:job_id/expire')
+    @ApiOperation({ summary: 'Force expire a print job' })
+    expireJob(@Param('job_id') jobId: string) {
+        return this.adminService.expireJob(jobId);
+    }
+
+    @Post('jobs/:job_id/resend-payment')
+    @ApiOperation({ summary: 'Resend payment link for a job' })
+    resendPayment(@Param('job_id') jobId: string) {
+        return this.adminService.resendPayment(jobId);
+    }
+
+    @Get('sessions')
+    @ApiOperation({ summary: 'Get active WhatsApp sessions' })
+    getSessions() {
+        return this.adminService.getSessions();
+    }
+
+    @Get('queue')
+    @ApiOperation({ summary: 'Get current BullMQ print/whatsapp queue status' })
+    getQueue() {
+        return this.adminService.getQueueStatus();
     }
 }

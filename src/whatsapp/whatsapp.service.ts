@@ -1,5 +1,5 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
-import { RazorpayService } from '../payments/razorpay/razorpay.service';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import axios from 'axios';
 import * as mammoth from 'mammoth';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
@@ -19,6 +19,7 @@ interface ChatState {
     jobId?: string;
     sender?: string;
     useFlow?: boolean;
+    startedAt?: number;
 }
 
 @Injectable()
@@ -28,7 +29,7 @@ export class WhatsappService {
     private userSessions = new Map<string, ChatState>();
 
     constructor(
-        private readonly razorpayService: RazorpayService,
+        @Inject(forwardRef(() => RazorpayService)) private readonly razorpayService: RazorpayService,
         private readonly supabaseStorage: SupabaseStorageService,
         @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider
     ) { }
@@ -50,23 +51,8 @@ export class WhatsappService {
 
     private async getPageCount(mediaUrl: string, mediaContentType?: string): Promise<{ pages: number; supabaseUrl?: string; bufferLocation?: string; }> {
         try {
-            const sid = process.env.TWILIO_ACCOUNT_SID;
-            const token = process.env.TWILIO_AUTH_TOKEN;
-            const auth = Buffer.from(`${sid}:${token}`).toString('base64');
-
-            const response = await axios.get(mediaUrl, {
-                responseType: 'arraybuffer',
-                headers: sid && token ? { 'Authorization': `Basic ${auth}` } : {},
-                validateStatus: null // Capture all HTTP errors
-            });
-
-            if (response.status !== 200) {
-                this.logger.error(`Failed to download Twilio media: HTTP ${response.status}`);
-                return { pages: 1 };
-            }
-
-            const buffer = Buffer.from(response.data);
-            const mime = (mediaContentType || response.headers['content-type'] || 'application/octet-stream').toLowerCase();
+            const buffer = await this.whatsappProvider.downloadMedia(mediaUrl);
+            const mime = (mediaContentType || 'application/octet-stream').toLowerCase();
 
             // Upload immediately to Supabase
             let supabaseUrl: string | undefined;
@@ -105,7 +91,7 @@ export class WhatsappService {
         let session = this.userSessions.get(sender);
 
         if (!session) {
-            session = { step: 'AWAITING_FILE' };
+            session = { step: 'AWAITING_FILE', startedAt: Date.now() };
             this.userSessions.set(sender, session);
         }
 
@@ -132,6 +118,24 @@ export class WhatsappService {
 
                 session.step = 'AWAITING_PAYMENT';
                 return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
+            }
+
+            // Fallback for AWAITING_FLOW if no interactiveData (e.g. testing on Telegram)
+            if (session.step === 'AWAITING_FLOW' && !interactiveData) {
+                // Return to normal flow or handle specific commands
+                if (normalizedMessage === 'reset' || normalizedMessage === 'start') {
+                    session.step = 'AWAITING_FILE';
+                    session.useFlow = false;
+                    await this.sendTextMessage(sender, "Session reset. Please send your document.");
+                    return null;
+                }
+
+                // If they just type something, send them back to the list-based questions
+                // to avoid being permanently stuck in AWAITING_FLOW on non-Meta channels.
+                session.step = 'AWAITING_COPIES';
+                await this.sendTextMessage(sender, "Since you are in text mode, let's continue with manual settings.");
+                await this.sendContentMessage(sender, 'cf_copies_list');
+                return null;
             }
 
             if (session.step === 'AWAITING_FILE') {
@@ -317,6 +321,13 @@ export class WhatsappService {
     getSession(sender: string): ChatState | undefined {
         const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
         return this.userSessions.get(to) || this.userSessions.get(sender);
+    }
+
+    getSessions(): any[] {
+        return Array.from(this.userSessions.entries()).map(([sender, state]) => ({
+            sender,
+            ...state
+        }));
     }
 
     async tellStudentJobIsPrinting(sender: string): Promise<boolean> {

@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { WhatsappProvider } from './whatsapp-provider.interface';
+import axios from 'axios';
 
 /**
- * Switch to this provider when migrating to Meta Cloud API
- * TODO: Implement all methods fully using Meta Graph API endpoints
+ * Meta Cloud API Provider
  */
 @Injectable()
 export class MetaProvider implements WhatsappProvider {
@@ -13,26 +13,132 @@ export class MetaProvider implements WhatsappProvider {
         require('dotenv').config();
     }
 
+    private getHeaders() {
+        const token = process.env.META_ACCESS_TOKEN;
+        return {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        };
+    }
+
+    private getApiUrl() {
+        const phoneId = process.env.META_WHATSAPP_PHONE_ID;
+        return `https://graph.facebook.com/v18.0/${phoneId}/messages`;
+    }
+
+    private formatTo(to: string): string {
+        // Meta requires clean international format without "whatsapp:" prefix or "+" sign
+        return to.replace('whatsapp:', '').replace('+', '');
+    }
+
     async sendTextMessage(to: string, body: string): Promise<void> {
-        this.logger.warn('MetaProvider sendTextMessage not fully implemented yet');
-        // TODO: Implement using Meta Graph API
-        // axios.post(`https://graph.facebook.com/v17.0/${phone_number_id}/messages`, ...)
+        try {
+            const payload = {
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual',
+                to: this.formatTo(to),
+                type: 'text',
+                text: { preview_url: false, body }
+            };
+
+            await axios.post(this.getApiUrl(), payload, { headers: this.getHeaders() });
+        } catch (error: any) {
+            this.logger.error(`Error sending Meta text message: ${error.response?.data?.error?.message || error.message}`);
+        }
     }
 
     async sendContentMessage(to: string, contentSid: string, variables?: any): Promise<void> {
-        this.logger.warn('MetaProvider sendContentMessage not fully implemented yet');
-        // TODO: Map abstract content types to Meta interactive message payloads
+        // Here we map the logical names we used in Twilio to Meta's native interactive formats.
+        try {
+            let interactivePayload: any = null;
+
+            if (contentSid === 'cf_copies_list') {
+                interactivePayload = {
+                    type: "list",
+                    header: { type: "text", text: "Copies" },
+                    body: { text: "How many copies of this document would you like?" },
+                    footer: { text: "Select an option" },
+                    action: {
+                        button: "Select Copies",
+                        sections: [
+                            {
+                                title: "Amount",
+                                rows: [
+                                    { id: "copies_1", title: "1 Copy", description: "One copy" },
+                                    { id: "copies_2", title: "2 Copies", description: "Two copies" },
+                                    { id: "copies_3", title: "3 Copies", description: "Three copies" },
+                                    { id: "copies_other", title: "Other", description: "A different amount" }
+                                ]
+                            }
+                        ]
+                    }
+                };
+            } else if (contentSid === 'cf_color_quickrep') {
+                interactivePayload = {
+                    type: "button",
+                    body: { text: "What type of print do you want?" },
+                    action: {
+                        buttons: [
+                            { type: "reply", reply: { id: "bw", title: "Black & White (₹2)" } },
+                            { type: "reply", reply: { id: "color", title: "Color (₹10)" } }
+                        ]
+                    }
+                };
+            } else if (contentSid === 'cf_sides_quickrep') {
+                interactivePayload = {
+                    type: "button",
+                    body: { text: "Would you like single-sided or double-sided printing?" },
+                    action: {
+                        buttons: [
+                            { type: "reply", reply: { id: "single", title: "Single Sided" } },
+                            { type: "reply", reply: { id: "double", title: "Double Sided" } }
+                        ]
+                    }
+                };
+            } else {
+                this.logger.warn(`Unknown contentSid: ${contentSid}`);
+                await this.sendTextMessage(to, "Please reply manually to select your options.");
+                return;
+            }
+
+            const payload = {
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual',
+                to: this.formatTo(to),
+                type: 'interactive',
+                interactive: interactivePayload
+            };
+
+            await axios.post(this.getApiUrl(), payload, { headers: this.getHeaders() });
+        } catch (error: any) {
+            this.logger.error(`Error sending Meta interactive message: ${error.response?.data?.error?.message || error.message}`);
+            await this.sendTextMessage(to, "Please reply manually with your selection. (Interactive formatting failed)");
+        }
     }
 
     async sendTypingIndicator(to: string): Promise<void> {
-        this.logger.warn('MetaProvider sendTypingIndicator not fully implemented yet');
-        // TODO: Implement using Meta Graph API sender actions if supported/needed
+        // Meta API requires marking messages as read contextually, 
+        // but there is no explicit "typing..." indicator endpoint for automated bots right now 
+        // that works globally outside of handovers without custom tokens. 
+        // We will just silently return for Meta as they handle read receipts automatically.
     }
 
-    parseIncomingWebhook(body: any): { sender: string; message: string; mediaUrl?: string; mediaContentType?: string } {
-        // Parses Meta Cloud API webhook format:
-        // { object: "whatsapp_business_account", entry: [{ changes: [{ value: { messages: [{ from, text: { body }, type }] } }] }] }
+    private async resolveMediaUrl(mediaId: string): Promise<string | undefined> {
+        try {
+            const token = process.env.META_ACCESS_TOKEN;
+            // 1. Fetch media object to get the explicit URL
+            const urlResult = await axios.get(`https://graph.facebook.com/v18.0/${mediaId}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const directUrl = urlResult.data?.url;
+            return directUrl;
+        } catch (e: any) {
+            this.logger.error(`Failed to resolve Meta media ID ${mediaId} to URL: ${e.response?.data?.error?.message || e.message}`);
+            return undefined;
+        }
+    }
 
+    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any }> {
         try {
             const entry = body.entry?.[0];
             const changes = entry?.changes?.[0];
@@ -42,27 +148,58 @@ export class MetaProvider implements WhatsappProvider {
                 return { sender: '', message: '' };
             }
 
-            const sender = messageObj.from;
+            // Always standardize back to the "whatsapp:+XXXXXXXXXXX" format that our app uses internally
+            const sender = `whatsapp:+${messageObj.from}`;
             let message = '';
+            let mediaUrl = undefined;
+            let mediaContentType = undefined;
+            let interactiveData = undefined;
 
             if (messageObj.type === 'text') {
                 message = messageObj.text?.body || '';
+            } else if (messageObj.type === 'interactive') {
+                const interactive = messageObj.interactive;
+                if (interactive.type === 'list_reply') {
+                    message = interactive.list_reply.id;
+                } else if (interactive.type === 'button_reply') {
+                    message = interactive.button_reply.id;
+                } else if (interactive.type === 'nfm_reply') {
+                    // WhatsApp Native Flow JSON payload
+                    try {
+                        interactiveData = JSON.parse(interactive.nfm_reply.response_json);
+                    } catch (e) {
+                        this.logger.error("Failed to parse Meta NFM interactive JSON payload");
+                    }
+                }
+            } else if (messageObj.type === 'document' || messageObj.type === 'image') {
+                const mediaPayload = messageObj[messageObj.type];
+                if (mediaPayload?.id) {
+                    // Because WhatsApp service uses direct URLs to download internally, 
+                    // we need to resolve the Graph API URL for it.
+                    mediaUrl = await this.resolveMediaUrl(mediaPayload.id);
+                    mediaContentType = mediaPayload.mime_type;
+                }
             }
 
-            // TODO: Extract media URL using Meta Graph API for media messages
-            // Will require making an API call to download the media using media ID
-            let mediaUrl = undefined;
-            let mediaContentType = undefined;
-
-            return {
-                sender,
-                message,
-                mediaUrl,
-                mediaContentType
-            };
+            return { sender, message, mediaUrl, mediaContentType, interactiveData };
         } catch (error) {
             this.logger.error('Failed to parse Meta webhook format', error);
             return { sender: '', message: '' };
         }
+    }
+
+    async downloadMedia(mediaUrl: string): Promise<Buffer> {
+        const token = process.env.META_ACCESS_TOKEN;
+        const response = await axios.get(mediaUrl, {
+            responseType: 'arraybuffer',
+            headers: { 'Authorization': `Bearer ${token}` },
+            validateStatus: null
+        });
+
+        if (response.status !== 200) {
+            throw new Error(`Failed to download Meta media: HTTP ${response.status}`);
+        }
+
+        return Buffer.from(response.data);
     }
 }

@@ -148,7 +148,7 @@ export class TwilioProvider implements WhatsappProvider, OnModuleInit {
         }
     }
 
-    parseIncomingWebhook(body: any): { sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any } {
+    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any }> {
         const sender = body.From;
         const bodyText = body.Body;
         const numMedia = parseInt(body.NumMedia, 10) || 0;
@@ -177,5 +177,23 @@ export class TwilioProvider implements WhatsappProvider, OnModuleInit {
             mediaContentType,
             interactiveData
         };
+    }
+
+    async downloadMedia(mediaUrl: string): Promise<Buffer> {
+        const sid = process.env.TWILIO_ACCOUNT_SID;
+        const token = process.env.TWILIO_AUTH_TOKEN;
+        const auth = Buffer.from(`${sid}:${token}`).toString('base64');
+
+        const response = await axios.get(mediaUrl, {
+            responseType: 'arraybuffer',
+            headers: sid && token ? { 'Authorization': `Basic ${auth}` } : {},
+            validateStatus: null
+        });
+
+        if (response.status !== 200) {
+            throw new Error(`Failed to download Twilio media: HTTP ${response.status}`);
+        }
+
+        return Buffer.from(response.data);
     }
 }

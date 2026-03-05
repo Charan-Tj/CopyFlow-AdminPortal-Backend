@@ -1,37 +1,36 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { WhatsappController } from './whatsapp.controller';
 import { WhatsappService } from './whatsapp.service';
-import { PaymentsModule } from '../payments/payments.module';
+import { PaymentModule } from '../payment/payment.module';
 import { StorageModule } from '../storage/storage.module';
-import { BullModule } from '@nestjs/bull';
-import { WhatsappProcessor } from './whatsapp.processor';
+import { WhatsappQueueService } from './whatsapp.queue';
 import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
 import { TwilioProvider } from './providers/twilio.provider';
 import { MetaProvider } from './providers/meta.provider';
+import { TelegramProvider } from './providers/telegram.provider';
 
 @Module({
     imports: [
-        PaymentsModule,
-        StorageModule,
-        BullModule.forRoot({
-            redis: process.env.REDIS_URL || 'redis://localhost:6379',
-        }),
-        BullModule.registerQueue({
-            name: 'whatsapp-messages',
-        })
+        forwardRef(() => PaymentModule),
+        StorageModule
     ],
     controllers: [WhatsappController],
     providers: [
+        TwilioProvider,
+        MetaProvider,
+        TelegramProvider,
         {
             provide: WHATSAPP_PROVIDER,
-            useFactory: () => {
+            useFactory: (twilio: TwilioProvider, meta: MetaProvider, telegram: TelegramProvider) => {
                 const providerType = process.env.WHATSAPP_PROVIDER || 'twilio';
-                return providerType === 'meta' ? new MetaProvider() : new TwilioProvider();
-            }
+                if (providerType === 'telegram') return telegram;
+                return providerType === 'meta' ? meta : twilio;
+            },
+            inject: [TwilioProvider, MetaProvider, TelegramProvider]
         },
         WhatsappService,
-        WhatsappProcessor
+        WhatsappQueueService
     ],
-    exports: [WhatsappService],
+    exports: [WhatsappService, WhatsappQueueService],
 })
 export class WhatsappModule { }

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, Logger } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrintService } from './print.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 
@@ -8,6 +8,7 @@ export class PrintController {
 
     constructor(
         private readonly printService: PrintService,
+        @Inject(forwardRef(() => WhatsappService))
         private readonly whatsappService: WhatsappService
     ) { }
 

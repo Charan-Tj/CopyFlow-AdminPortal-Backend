@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { PrintService } from '../print/print.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
@@ -8,7 +8,9 @@ export class PaymentService {
     private readonly logger = new Logger(PaymentService.name);
 
     constructor(
+        @Inject(forwardRef(() => PrintService))
         private readonly printService: PrintService,
+        @Inject(forwardRef(() => WhatsappService))
         private readonly whatsappService: WhatsappService,
     ) { }
 

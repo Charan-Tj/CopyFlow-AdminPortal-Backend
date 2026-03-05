@@ -1,8 +1,7 @@
-import { Controller, Post, Body, Header, Logger, Inject } from '@nestjs/common';
-import { InjectQueue } from '@nestjs/bull';
-import type { Queue } from 'bull';
+import { Controller, Post, Get, Body, Query, Header, Logger, Inject } from '@nestjs/common';
 import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
+import { WhatsappQueueService } from './whatsapp.queue';
 
 @Controller('whatsapp')
 export class WhatsappController {
@@ -10,8 +9,27 @@ export class WhatsappController {
 
   constructor(
     @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider,
-    @InjectQueue('whatsapp-messages') private readonly whatsappQueue: Queue
+    private readonly whatsappQueue: WhatsappQueueService
   ) { }
+
+  /**
+   * Controller for Meta Webhook Verification
+   * Accepts GET requests from Meta Developer Portal for webhook setup
+   */
+  @Get()
+  verifyWebhook(
+    @Query('hub.mode') mode: string,
+    @Query('hub.verify_token') token: string,
+    @Query('hub.challenge') challenge: string
+  ) {
+    const expectedToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
+    if (mode === 'subscribe' && token === expectedToken) {
+      this.logger.log('Meta Webhook Verified Successfully');
+      return challenge;
+    }
+    this.logger.warn('Failed to verify Meta webhook due to missing or invalid token');
+    return 'Verification failed';
+  }
 
   /**
    * Controller for WhatsApp Webhook
@@ -23,7 +41,7 @@ export class WhatsappController {
     this.logger.log('Received webhook from WhatsApp Provider');
 
     // Parse the payload depending on the provider (Twilio, Meta, etc.)
-    const parsedData = this.whatsappProvider.parseIncomingWebhook(body);
+    const parsedData = await this.whatsappProvider.parseIncomingWebhook(body);
 
     if (parsedData.sender) {
       // Enqueue the job for instant webhook 200 OK response
