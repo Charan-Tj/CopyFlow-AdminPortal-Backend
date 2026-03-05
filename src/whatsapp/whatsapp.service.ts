@@ -3,12 +3,15 @@ import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import axios from 'axios';
 import * as mammoth from 'mammoth';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 const pdfParse = require('pdf-parse');
 
 interface ChatState {
     step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW';
+    nodeId?: string;
+    nodeCode?: string;
     fileUrl?: string;
     pages?: number;
     copies?: number;
@@ -31,6 +34,7 @@ export class WhatsappService {
     constructor(
         @Inject(forwardRef(() => RazorpayService)) private readonly razorpayService: RazorpayService,
         private readonly supabaseStorage: SupabaseStorageService,
+        private readonly prisma: PrismaService,
         @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider
     ) { }
 
@@ -139,6 +143,22 @@ export class WhatsappService {
             }
 
             if (session.step === 'AWAITING_FILE') {
+                if (normalizedMessage.startsWith('start ')) {
+                    const qrToken = normalizedMessage.split(' ')[1];
+                    const node = await this.prisma.node.findUnique({
+                        where: { qr_token: qrToken }
+                    });
+                    if (node) {
+                        session.nodeId = node.id;
+                        session.nodeCode = node.node_code;
+                        await this.sendTypingIndicator(sender);
+                        await this.sendTextMessage(sender, `Welcome to CopyFlow @ ${node.name}! Please send a file (PDF/Word/image) to get started.`);
+                    } else {
+                        await this.sendTextMessage(sender, "Invalid or expired QR code. Please scan a valid shop QR code.");
+                    }
+                    return null;
+                }
+
                 if (normalizedMessage === 'hi-flow') {
                     session.useFlow = true;
                     await this.sendTypingIndicator(sender);

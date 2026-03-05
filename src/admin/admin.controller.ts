@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Query, UseGuards, Body } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
@@ -63,5 +63,43 @@ export class AdminController {
     @ApiOperation({ summary: 'Get current BullMQ print/whatsapp queue status' })
     getQueue() {
         return this.adminService.getQueueStatus();
+    }
+
+    // ====== NODE SYSTEM ENDPOINTS ====== //
+
+    @Get('nodes')
+    @ApiOperation({ summary: 'List all registered Nodes' })
+    getNodes() {
+        return this.adminService.getAllNodes();
+    }
+
+    @Get('nodes/:id')
+    @ApiOperation({ summary: 'Get details for a specific Node' })
+    getNode(@Param('id') id: string) {
+        return this.adminService.getNode(id);
+    }
+
+    @Post('nodes')
+    @ApiOperation({ summary: 'Register a new Node' })
+    createNode(@Body() body: any) {
+        return this.adminService.createNode(body);
+    }
+
+    @Patch('nodes/:id/toggle')
+    @ApiOperation({ summary: 'Toggle Node active status' })
+    toggleNode(@Param('id') id: string) {
+        return this.adminService.toggleNode(id);
+    }
+
+    @Post('nodes/:id/credentials')
+    @ApiOperation({ summary: 'Create operator credentials for a node' })
+    createNodeCredentials(@Param('id') id: string, @Body() body: any) {
+        return this.adminService.createNodeCredentials(id, body.email, body.password);
+    }
+
+    @Get('nodes/:id/qr')
+    @ApiOperation({ summary: 'Generate WhatsApp QR code for a node' })
+    getNodeQr(@Param('id') id: string) {
+        return this.adminService.generateNodeQr(id);
     }
 }

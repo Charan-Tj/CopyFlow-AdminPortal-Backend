@@ -9,10 +9,13 @@ import { TwilioProvider } from './providers/twilio.provider';
 import { MetaProvider } from './providers/meta.provider';
 import { TelegramProvider } from './providers/telegram.provider';
 
+import { PrismaModule } from '../prisma/prisma.module';
+
 @Module({
     imports: [
         forwardRef(() => PaymentModule),
-        StorageModule
+        StorageModule,
+        PrismaModule
     ],
     controllers: [WhatsappController],
     providers: [

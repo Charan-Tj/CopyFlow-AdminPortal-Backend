@@ -20,6 +20,10 @@ export class SupabaseStorageService {
         }
     }
 
+    getClient(): SupabaseClient {
+        return this.supabase;
+    }
+
     async uploadFile(buffer: Buffer, filename: string, mimeType: string): Promise<string> {
         if (!this.supabase) {
             this.logger.error('Cannot upload to Supabase: Client not initialized.');

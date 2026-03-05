@@ -1,0 +1,233 @@
+import { Injectable, UnauthorizedException, ConflictException, Inject, forwardRef } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { createClient } from '@supabase/supabase-js';
+
+@Injectable()
+export class NodeService {
+    constructor(
+        private prisma: PrismaService,
+        private jwtService: JwtService,
+        @Inject(forwardRef(() => WhatsappService))
+        private whatsappService: WhatsappService
+    ) { }
+
+    async login(email: string, pass: string) {
+        const cred = await this.prisma.nodeCredential.findUnique({
+            where: { email },
+            include: { node: true }
+        });
+
+        if (!cred) {
+            throw new UnauthorizedException('Invalid credentials');
+        }
+
+        const isMatch = await bcrypt.compare(pass, cred.password_hash);
+        if (!isMatch) {
+            throw new UnauthorizedException('Invalid credentials');
+        }
+
+        await this.prisma.nodeCredential.update({
+            where: { id: cred.id },
+            data: { last_login: new Date() }
+        });
+
+        const payload = {
+            nodeId: cred.node_id,
+            nodeCode: cred.node.node_code,
+            role: cred.role,
+            email: cred.email
+        };
+
+        return {
+            access_token: await this.jwtService.signAsync(payload),
+            node: {
+                id: cred.node.id,
+                name: cred.node.name,
+                code: cred.node.node_code
+            }
+        };
+    }
+
+    async updateHeartbeat(nodeId: string, paperLevel: string, printers: any[]) {
+        // Find existing kiosk for this node or create a generic one
+        let kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: nodeId }
+        });
+
+        if (!kiosk) {
+            // Create a default kiosk for the node if it doesn't exist
+            kiosk = await this.prisma.kiosk.create({
+                data: {
+                    pi_id: `kiosk_${nodeId}_1`,
+                    node_id: nodeId,
+                    secret: 'default_secret',
+                    paper_level: paperLevel
+                }
+            });
+        }
+
+        await this.prisma.kiosk.update({
+            where: { pi_id: kiosk.pi_id },
+            data: {
+                last_heartbeat: new Date(),
+                paper_level: paperLevel,
+                printer_list: printers
+            }
+        });
+
+        return { success: true };
+    }
+
+    async getPendingJobs(nodeId: string) {
+        const now = new Date();
+        const tenMinsAgo = new Date(now.getTime() - 10 * 60 * 1000);
+
+        const jobs = await this.prisma.printJob.findMany({
+            where: {
+                node_id: nodeId,
+                status: 'PAID',
+                OR: [
+                    { claimed_at: null },
+                    { claimed_at: { lt: tenMinsAgo } }
+                ]
+            },
+            orderBy: {
+                createdAt: 'asc'
+            }
+        });
+
+        const supabaseUrl = process.env.SUPABASE_URL || '';
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        const jobsWithUrls = await Promise.all(jobs.map(async (job) => {
+            let signedFileUrl = job.file_url;
+            if (job.file_url) {
+                const urlParts = job.file_url.split('/');
+                const filename = urlParts[urlParts.length - 1];
+                if (filename) {
+                    const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
+                    if (data?.signedUrl) {
+                        signedFileUrl = data.signedUrl;
+                    }
+                }
+            }
+
+            return {
+                ...job,
+                file_url: signedFileUrl,
+                expires_at: new Date(now.getTime() + 15 * 60 * 1000)
+            };
+        }));
+
+        return jobsWithUrls;
+    }
+
+    async acknowledgeJob(nodeId: string, jobId: string) {
+        const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
+
+        if (!job || job.node_id !== nodeId) {
+            throw new Error('Job not found or unauthorized');
+        }
+
+        await this.prisma.printJob.update({
+            where: { job_id: jobId },
+            data: { status: 'PRINTED' }
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                event: 'JOB_PRINTED',
+                node_id: nodeId,
+                metadata: { jobId }
+            }
+        });
+
+        if (job.phone_number) {
+            await this.whatsappService.tellStudentJobIsPrinting(`whatsapp:${job.phone_number}`);
+        }
+
+        return { success: true, status: 'PRINTED' };
+    }
+
+    async claimJob(nodeId: string, jobId: string) {
+        const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
+
+        if (!job || job.node_id !== nodeId) {
+            throw new Error('Job not found or unauthorized');
+        }
+
+        const now = new Date();
+        if (job.claimed_at && (now.getTime() - job.claimed_at.getTime() < 10 * 60 * 1000)) {
+            throw new ConflictException('Job already claimed');
+        }
+
+        const updatedJob = await this.prisma.printJob.update({
+            where: { job_id: jobId },
+            data: {
+                claimed_at: now,
+                claimed_by: nodeId
+            }
+        });
+
+        const supabaseUrl = process.env.SUPABASE_URL || '';
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        let signedFileUrl = updatedJob.file_url;
+        if (updatedJob.file_url) {
+            const urlParts = updatedJob.file_url.split('/');
+            const filename = urlParts[urlParts.length - 1];
+            if (filename) {
+                const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
+                if (data?.signedUrl) {
+                    signedFileUrl = data.signedUrl;
+                }
+            }
+        }
+
+        return {
+            job_id: updatedJob.job_id,
+            file_url: signedFileUrl,
+            file_checksum: updatedJob.file_checksum,
+            copies: updatedJob.copies,
+            color: updatedJob.color_mode === 'COLOR',
+            sides: updatedJob.sides,
+            pages: updatedJob.page_count,
+            claimed_at: updatedJob.claimed_at,
+            expires_at: new Date(now.getTime() + 15 * 60 * 1000)
+        };
+    }
+
+    async failJob(nodeId: string, jobId: string, reason: string, errorCode?: string) {
+        const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
+        if (!job || job.node_id !== nodeId) return { success: false };
+
+        await this.prisma.printJob.update({
+            where: { job_id: jobId },
+            data: { status: 'FAILED' }
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                event: 'JOB_FAILED',
+                node_id: nodeId,
+                metadata: { jobId, reason, error_code: errorCode }
+            }
+        });
+
+        if (job.phone_number) {
+            const msg = `❌ Sorry, your print job failed. Reason: ${reason}. \n   Please contact the shop operator.`;
+            // Bypass private typing to avoid touching whatsapp module
+            const waService = this.whatsappService as any;
+            if (typeof waService.sendTextMessage === 'function') {
+                await waService.sendTextMessage(`whatsapp:${job.phone_number}`, msg);
+            }
+        }
+
+        return { success: true, status: 'FAILED' };
+    }
+}

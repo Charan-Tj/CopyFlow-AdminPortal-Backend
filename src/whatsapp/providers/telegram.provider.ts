@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 import { WhatsappProvider } from './whatsapp-provider.interface';
 import { Telegraf, Markup, Context } from 'telegraf';
 import axios from 'axios';
@@ -10,9 +10,10 @@ import { WhatsappQueueService } from '../whatsapp.queue';
  * entirely for free without rate limits.
  */
 @Injectable()
-export class TelegramProvider implements WhatsappProvider, OnModuleInit {
+export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(TelegramProvider.name);
-    private bot: Telegraf;
+    private static bot: Telegraf | null = null;
+    private static isLaunched = false;
 
     constructor(
         @Inject(forwardRef(() => WhatsappQueueService))
@@ -20,59 +21,77 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit {
     ) {
         require('dotenv').config();
         const token = process.env.TELEGRAM_BOT_TOKEN;
+        this.logger.log(`TelegramProvider constructor. Token exists: ${!!token}, bot exists: ${!!TelegramProvider.bot}`);
 
-        if (token) {
-            this.bot = new Telegraf(token);
+        if (token && !TelegramProvider.bot) {
+            TelegramProvider.bot = new Telegraf(token);
             this.setupListeners();
-        } else {
+        } else if (!token) {
             this.logger.warn('TELEGRAM_BOT_TOKEN not found! Telegram provider will not receive messages.');
+        } else if (TelegramProvider.bot) {
+            // Re-setup listeners for the new instance 
+            this.setupListeners();
         }
     }
 
     async onModuleInit() {
-        if (this.bot) {
-            this.bot.launch();
-            this.logger.log('🚀 Telegram Bot launched successfully');
+        if (TelegramProvider.bot && !TelegramProvider.isLaunched) {
+            TelegramProvider.isLaunched = true; // Set lock BEFORE async call
 
-            // Enable graceful stop
-            process.once('SIGINT', () => this.bot.stop('SIGINT'));
-            process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
+            // Do NOT await launch()! It is an infinite long-polling process that blocks NestJS startup
+            TelegramProvider.bot.launch({ dropPendingUpdates: true })
+                .then(() => {
+                    this.logger.log('🚀 Telegram Bot launched successfully (in background)');
+                })
+                .catch((e: any) => {
+                    this.logger.error(`Telegram launch failed: ${e.message}`);
+                    TelegramProvider.isLaunched = false;
+                });
+
+            this.logger.log('🚀 Telegram Provider initialized');
+        }
+    }
+
+    async onModuleDestroy() {
+        if (TelegramProvider.bot && TelegramProvider.isLaunched) {
+            this.logger.log('Stopping Telegram Bot gracefully...');
+            try {
+                TelegramProvider.bot.stop('SIGINT');
+            } catch (e) { }
+            TelegramProvider.isLaunched = false;
         }
     }
 
     private setupListeners() {
-        // Handle incoming text and interactive button clicks natively within Telegraf
-        // We forward these immediately to the BullMQ system as if it were a webhook
-        this.bot.on('message', async (ctx: any) => {
+        if (!TelegramProvider.bot) return;
+
+        TelegramProvider.bot.on('message', async (ctx: any) => {
             const parsed = await this.parseIncomingWebhook({ type: 'message', ctx });
             if (parsed.sender) {
                 await this.queueService.add('process-incoming', parsed);
             }
         });
 
-        this.bot.on('callback_query', async (ctx: any) => {
+        TelegramProvider.bot.on('callback_query', async (ctx: any) => {
             const parsed = await this.parseIncomingWebhook({ type: 'callback', ctx });
             if (parsed.sender) {
                 await this.queueService.add('process-incoming', parsed);
             }
             try {
-                // Acknowledge the telegram tap immediately
                 await ctx.answerCbQuery();
             } catch (e) { }
         });
     }
 
     private formatTo(to: string): number {
-        // In our app, we store IDs as whatsapp:+1234567, 
-        // For telegram tests, the "phone number" is just the chat ID
         return parseInt(to.replace('whatsapp:', '').replace('+', ''), 10);
     }
 
     async sendTextMessage(to: string, body: string): Promise<void> {
         try {
             const chatId = this.formatTo(to);
-            if (isNaN(chatId)) return;
-            await this.bot.telegram.sendMessage(chatId, body);
+            if (isNaN(chatId) || !TelegramProvider.bot) return;
+            await TelegramProvider.bot.telegram.sendMessage(chatId, body);
         } catch (error: any) {
             this.logger.error(`Error sending Telegram msg: ${error.message}`);
         }
@@ -81,10 +100,10 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit {
     async sendContentMessage(to: string, contentSid: string, variables?: any): Promise<void> {
         try {
             const chatId = this.formatTo(to);
-            if (isNaN(chatId)) return;
+            if (isNaN(chatId) || !TelegramProvider.bot) return;
 
             if (contentSid === 'cf_copies_list') {
-                await this.bot.telegram.sendMessage(chatId, 'How many copies of this document would you like?',
+                await TelegramProvider.bot.telegram.sendMessage(chatId, 'How many copies of this document would you like?',
                     Markup.inlineKeyboard([
                         [Markup.button.callback('1 Copy', 'copies_1')],
                         [Markup.button.callback('2 Copies', 'copies_2')],
@@ -93,14 +112,14 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit {
                     ])
                 );
             } else if (contentSid === 'cf_color_quickrep') {
-                await this.bot.telegram.sendMessage(chatId, 'What type of print do you want?',
+                await TelegramProvider.bot.telegram.sendMessage(chatId, 'What type of print do you want?',
                     Markup.inlineKeyboard([
                         [Markup.button.callback('Black & White (₹2)', 'bw')],
                         [Markup.button.callback('Color (₹10)', 'color')]
                     ])
                 );
             } else if (contentSid === 'cf_sides_quickrep') {
-                await this.bot.telegram.sendMessage(chatId, 'Would you like single-sided or double-sided printing?',
+                await TelegramProvider.bot.telegram.sendMessage(chatId, 'Would you like single-sided or double-sided printing?',
                     Markup.inlineKeyboard([
                         [Markup.button.callback('Single Sided', 'single')],
                         [Markup.button.callback('Double Sided', 'double')]
@@ -118,17 +137,16 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit {
     async sendTypingIndicator(to: string): Promise<void> {
         try {
             const chatId = this.formatTo(to);
-            if (!isNaN(chatId)) {
-                await this.bot.telegram.sendChatAction(chatId, 'typing');
+            if (!isNaN(chatId) && TelegramProvider.bot) {
+                await TelegramProvider.bot.telegram.sendChatAction(chatId, 'typing');
             }
         } catch (e) { }
     }
 
     async downloadMedia(mediaUrl: string): Promise<Buffer> {
-        // In Telegram, the "mediaUrl" we extract is actually a Telegram `file_id`.
-        // We have to ask Telegram for the actual download path first, then download it.
         try {
-            const fileLink = await this.bot.telegram.getFileLink(mediaUrl);
+            if (!TelegramProvider.bot) throw new Error('Bot not running');
+            const fileLink = await TelegramProvider.bot.telegram.getFileLink(mediaUrl);
             const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
             return Buffer.from(response.data);
         } catch (e: any) {

@@ -8,9 +8,10 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { PrintModule } from './print/print.module';
 import { PaymentModule } from './payment/payment.module';
 import { StorageModule } from './storage/storage.module';
+import { NodeModule } from './node/node.module';
 
 @Module({
-  imports: [PrismaModule, JobsModule, AdminModule, WhatsappModule, PrintModule, PaymentModule, StorageModule],
+  imports: [PrismaModule, JobsModule, AdminModule, WhatsappModule, PrintModule, PaymentModule, StorageModule, NodeModule],
   controllers: [AppController],
   providers: [AppService],
 })

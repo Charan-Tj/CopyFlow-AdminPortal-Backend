@@ -4,6 +4,19 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
+    let node = await prisma.node.findUnique({ where: { node_code: 'TEST01' } });
+    if (!node) {
+        node = await prisma.node.create({
+            data: {
+                node_code: 'TEST01',
+                name: 'Test Node',
+                college: 'Test University',
+                city: 'Test City',
+                address: '123 Test Street'
+            }
+        });
+    }
+
     await prisma.kiosk.upsert({
         where: { pi_id: 'PI_TEST_1' },
         update: {},
@@ -11,6 +24,7 @@ async function main() {
             pi_id: 'PI_TEST_1',
             secret: 'secret123',
             location: 'Test Lab',
+            node_id: node.id
         },
     });
     console.log('Seeded PI_TEST_1');
