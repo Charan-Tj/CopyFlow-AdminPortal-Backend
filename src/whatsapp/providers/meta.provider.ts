@@ -22,7 +22,7 @@ export class MetaProvider implements WhatsappProvider {
     }
 
     private getApiUrl() {
-        const phoneId = process.env.META_WHATSAPP_PHONE_ID;
+        const phoneId = process.env.META_PHONE_NUMBER_ID;
         return `https://graph.facebook.com/v18.0/${phoneId}/messages`;
     }
 
@@ -52,7 +52,21 @@ export class MetaProvider implements WhatsappProvider {
         try {
             let interactivePayload: any = null;
 
-            if (contentSid === 'cf_copies_list') {
+            if (contentSid === 'cf_file_uploaded') {
+                const { fileNum, pages, totalPages, fileCount } = variables || {};
+                const bodyText = fileCount > 1
+                    ? `✅ File ${fileNum} received — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total: ${fileCount} files, ${totalPages} pages\n\nSend more files or tap Done to continue.`
+                    : `✅ File received — ${pages} page${pages > 1 ? 's' : ''}\n\nSend more files or tap Done to continue.`;
+                interactivePayload = {
+                    type: "button",
+                    body: { text: bodyText },
+                    action: {
+                        buttons: [
+                            { type: "reply", reply: { id: "done_uploading", title: "✅ Done — Print" } }
+                        ]
+                    }
+                };
+            } else if (contentSid === 'cf_copies_list') {
                 interactivePayload = {
                     type: "list",
                     header: { type: "text", text: "Copies" },
