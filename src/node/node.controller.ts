@@ -19,6 +19,22 @@ export class NodeController {
         return this.nodeService.login(body.email, body.password);
     }
 
+    // ---- Self-Registration (public — no guard) ----
+
+    @Post('register/validate')
+    @ApiOperation({ summary: 'Validate a one-time registration code (preview only, does not consume it)' })
+    @ApiBody({ schema: { type: 'object', properties: { registration_code: { type: 'string' } }, required: ['registration_code'] } })
+    async validateRegistrationCode(@Body() body: any) {
+        return this.nodeService.validateRegistrationCode(body.registration_code);
+    }
+
+    @Post('register')
+    @ApiOperation({ summary: 'Register node using one-time code' })
+    @ApiBody({ schema: { type: 'object', properties: { registration_code: { type: 'string' }, email: { type: 'string' }, password: { type: 'string' } }, required: ['registration_code', 'email', 'password'] } })
+    async registerNode(@Body() body: any) {
+        return this.nodeService.registerNode(body.registration_code, body.email, body.password);
+    }
+
     @UseGuards(NodeAuthGuard)
     @Post('heartbeat')
     @ApiOperation({ summary: 'Send kiosk heartbeat and printer status' })

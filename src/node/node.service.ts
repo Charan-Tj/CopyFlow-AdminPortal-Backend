@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ConflictException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, NotFoundException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -229,5 +229,101 @@ export class NodeService {
         }
 
         return { success: true, status: 'FAILED' };
+    }
+
+    // ============================================================
+    // Self-Registration Flow
+    // ============================================================
+
+    async validateRegistrationCode(code: string) {
+        if (!code) throw new BadRequestException('Registration code is required');
+
+        const regCode = await this.prisma.registrationCode.findUnique({
+            where: { code },
+            include: { node: true }
+        });
+
+        if (!regCode) throw new NotFoundException('Invalid registration code');
+        if (regCode.used) throw new ConflictException('Registration code already used');
+        if (regCode.expires_at < new Date()) throw new BadRequestException('Registration code expired');
+
+        return {
+            valid: true,
+            node: {
+                id: regCode.node.id,
+                name: regCode.node.name,
+                node_code: regCode.node.node_code,
+                college: regCode.node.college,
+                city: regCode.node.city
+            }
+        };
+    }
+
+    async registerNode(code: string, email: string, password: string) {
+        const { node } = await this.validateRegistrationCode(code);
+
+        const existing = await this.prisma.nodeCredential.findUnique({ where: { email } });
+        if (existing) throw new ConflictException('Email already registered');
+
+        const password_hash = await bcrypt.hash(password, 10);
+
+        await this.prisma.nodeCredential.create({
+            data: { node_id: node.id, email, password_hash, role: 'OPERATOR' }
+        });
+
+        await this.prisma.registrationCode.update({
+            where: { code },
+            data: { used: true, used_at: new Date() }
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                event: 'NODE_SELF_REGISTERED',
+                node_id: node.id,
+                metadata: { email, code }
+            }
+        });
+
+        const payload = {
+            nodeId: node.id,
+            nodeCode: node.node_code,
+            role: 'OPERATOR',
+            email
+        };
+
+        return {
+            access_token: await this.jwtService.signAsync(payload),
+            node: { id: node.id, name: node.name, code: node.node_code }
+        };
+    }
+
+    async generateRegistrationCode(nodeId: string, createdBy: string) {
+        const node = await this.prisma.node.findUnique({ where: { id: nodeId } });
+        if (!node) throw new NotFoundException('Node not found');
+
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        const random6 = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+        const code = `CF-${node.node_code}-${random6}`;
+
+        const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+        const regCode = await this.prisma.registrationCode.create({
+            data: { node_id: nodeId, code, created_by: createdBy, expires_at }
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                event: 'REGISTRATION_CODE_GENERATED',
+                node_id: nodeId,
+                actor: createdBy,
+                metadata: { code }
+            }
+        });
+
+        return {
+            code: regCode.code,
+            expires_at: regCode.expires_at,
+            node: { id: node.id, name: node.name, node_code: node.node_code }
+        };
     }
 }

@@ -63,7 +63,7 @@ The **Copy Flow Admin Control Plane** is a comprehensive management system for a
 ### Backend Setup
 1.  **Navigate to the project root**:
     ```bash
-    cd /home/crackjack/Projects/CopyFlow/AdminPortal
+    cd /home/crackjack/Projects/CopyFlow/backend-engine
     ```
 2.  **Install dependencies**:
     ```bash

@@ -4,7 +4,7 @@
 
 The **Copy Flow System** is a platform facilitating a network of self-service printing kiosks. The overarching architecture splits responsibility between real-time hardware interaction (IoT printing nodes), conversational chatbot interfaces (WhatsApp & Telegram), and a robust administrative control plane.
 
-The **AdminPortal (Backend)** acts as the central orchestrator for these operations, utilizing a modular, layered structure to separate concerns and ensure maintainability.
+The **backend-engine** acts as the central orchestrator for these operations, utilizing a modular, layered structure to separate concerns and ensure maintainability.
 
 ## 2. System Architecture Diagram
 

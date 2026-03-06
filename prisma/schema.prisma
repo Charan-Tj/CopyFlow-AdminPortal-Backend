@@ -120,11 +120,12 @@ model Node {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
-  kiosks      Kiosk[]
-  jobs        PrintJob[]
-  credentials NodeCredential[]
-  pricing     PricingConfig[]
-  audit_logs  AuditLog[]
+  kiosks             Kiosk[]
+  jobs               PrintJob[]
+  credentials        NodeCredential[]
+  pricing            PricingConfig[]
+  audit_logs         AuditLog[]
+  registration_codes RegistrationCode[]
 }
 
 model NodeCredential {
@@ -137,4 +138,16 @@ model NodeCredential {
   created_at    DateTime  @default(now())
 
   node Node @relation(fields: [node_id], references: [id])
+}
+
+model RegistrationCode {
+  id         String    @id @default(uuid())
+  node_id    String
+  code       String    @unique
+  created_by String
+  used       Boolean   @default(false)
+  used_at    DateTime?
+  expires_at DateTime
+  createdAt  DateTime  @default(now())
+  node       Node      @relation(fields: [node_id], references: [id])
 }

@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Patch, Param, Query, UseGuards, Body } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Query, UseGuards, Body, Request } from '@nestjs/common';
 import { AdminService } from './admin.service';
+import { NodeService } from '../node/node.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 
@@ -8,7 +9,10 @@ import { AdminAuthGuard } from '../common/guards/admin-auth.guard';
 @UseGuards(AdminAuthGuard)
 @Controller('admin')
 export class AdminController {
-    constructor(private readonly adminService: AdminService) { }
+    constructor(
+        private readonly adminService: AdminService,
+        private readonly nodeService: NodeService
+    ) { }
 
     @Get('kiosks')
     @ApiOperation({ summary: 'List all registered Kiosks' })
@@ -101,5 +105,12 @@ export class AdminController {
     @ApiOperation({ summary: 'Generate WhatsApp QR code for a node' })
     getNodeQr(@Param('id') id: string) {
         return this.adminService.generateNodeQr(id);
+    }
+
+    @Post('nodes/:id/registration-code')
+    @ApiOperation({ summary: 'Generate one-time registration code for node' })
+    generateRegistrationCode(@Param('id') id: string, @Request() req: any) {
+        const adminEmail = req.user?.email || req.user?.sub || 'admin';
+        return this.nodeService.generateRegistrationCode(id, adminEmail);
     }
 }

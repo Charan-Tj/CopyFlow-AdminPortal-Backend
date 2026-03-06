@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -8,6 +8,7 @@ import { KiosksModule } from './kiosks/kiosks.module';
 
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PaymentModule } from '../payment/payment.module';
+import { NodeModule } from '../node/node.module';
 
 @Module({
   imports: [
@@ -16,7 +17,8 @@ import { PaymentModule } from '../payment/payment.module';
     PricingModule,
     KiosksModule,
     WhatsappModule,
-    PaymentModule
+    PaymentModule,
+    forwardRef(() => NodeModule)
   ],
   controllers: [AdminController],
   providers: [AdminService],
