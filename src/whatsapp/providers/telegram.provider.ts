@@ -36,19 +36,35 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
 
     async onModuleInit() {
         if (TelegramProvider.bot && !TelegramProvider.isLaunched) {
-            TelegramProvider.isLaunched = true; // Set lock BEFORE async call
-
-            // Do NOT await launch()! It is an infinite long-polling process that blocks NestJS startup
-            TelegramProvider.bot.launch({ dropPendingUpdates: true })
-                .then(() => {
-                    this.logger.log('🚀 Telegram Bot launched successfully (in background)');
-                })
-                .catch((e: any) => {
-                    this.logger.error(`Telegram launch failed: ${e.message}`);
-                    TelegramProvider.isLaunched = false;
-                });
-
+            TelegramProvider.isLaunched = true;
+            this.launchWithRetry(3, 5000);
             this.logger.log('🚀 Telegram Provider initialized');
+        }
+    }
+
+    private async launchWithRetry(maxRetries: number, delayMs: number) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                // Do NOT await indefinitely — launch() is a long-polling loop
+                TelegramProvider.bot!.launch({ dropPendingUpdates: true })
+                    .then(() => this.logger.log('🚀 Telegram Bot launched successfully (in background)'))
+                    .catch((e: any) => {
+                        this.logger.error(`Telegram polling stopped: ${e.message}`);
+                        TelegramProvider.isLaunched = false;
+                    });
+                this.logger.log(`Telegram Bot launch initiated (attempt ${attempt}/${maxRetries})`);
+                return; // Successfully started
+            } catch (e: any) {
+                this.logger.error(`Telegram launch attempt ${attempt} failed: ${e.message}`);
+                if (attempt < maxRetries) {
+                    this.logger.log(`Retrying in ${delayMs / 1000}s...`);
+                    await new Promise(r => setTimeout(r, delayMs));
+                    delayMs *= 2; // Exponential backoff
+                } else {
+                    this.logger.error('All Telegram launch attempts exhausted. Bot will not receive messages.');
+                    TelegramProvider.isLaunched = false;
+                }
+            }
         }
     }
 
