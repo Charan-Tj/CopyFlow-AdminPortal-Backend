@@ -127,7 +127,18 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
             const chatId = this.formatTo(to);
             if (isNaN(chatId) || !TelegramProvider.bot) return;
 
-            if (contentSid === 'cf_copies_list') {
+            if (contentSid === 'cf_file_uploaded') {
+                const { fileNum, pages, totalPages, fileCount } = variables || {};
+                const summary = fileCount > 1
+                    ? `✅ File ${fileNum} received — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total: ${fileCount} files, ${totalPages} pages`
+                    : `✅ File received — ${pages} page${pages > 1 ? 's' : ''}`;
+
+                await TelegramProvider.bot.telegram.sendMessage(chatId, `${summary}\n\nSend more files or tap "Done" to continue.`,
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('✅ Done — Proceed to Print', 'done_uploading')],
+                    ])
+                );
+            } else if (contentSid === 'cf_copies_list') {
                 await TelegramProvider.bot.telegram.sendMessage(chatId, 'How many copies of this document would you like?',
                     Markup.inlineKeyboard([
                         [Markup.button.callback('1 Copy', 'copies_1')],

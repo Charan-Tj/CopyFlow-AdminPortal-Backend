@@ -8,11 +8,17 @@ import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 const pdfParse = require('pdf-parse');
 
+interface UploadedFile {
+    url: string;
+    pages: number;
+    name: string;
+}
+
 interface ChatState {
     step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW';
     nodeId?: string;
     nodeCode?: string;
-    fileUrl?: string;
+    files: UploadedFile[];
     pages?: number;
     copies?: number;
     color?: boolean;
@@ -46,28 +52,23 @@ export class WhatsappService {
         await this.whatsappProvider.sendTextMessage(to, body);
     }
 
-    /**
-     * Sends a WhatsApp Typing indicator via the provider abstraction
-     */
     private async sendTypingIndicator(to: string) {
         await this.whatsappProvider.sendTypingIndicator(to);
     }
 
-    private async getPageCount(mediaUrl: string, mediaContentType?: string): Promise<{ pages: number; supabaseUrl?: string; bufferLocation?: string; }> {
+    private async getPageCount(mediaUrl: string, mediaContentType?: string): Promise<{ pages: number; supabaseUrl?: string; fileName?: string }> {
         try {
             const buffer = await this.whatsappProvider.downloadMedia(mediaUrl);
             const mime = (mediaContentType || 'application/octet-stream').toLowerCase();
 
-            // Upload immediately to Supabase
             let supabaseUrl: string | undefined;
+            let fileName: string | undefined;
             try {
-                // generate a reasonably unique filename for storage
                 const extension = mime.includes('pdf') ? 'pdf' : (mime.includes('word') ? 'docx' : 'bin');
-                const filename = `upload_${Date.now()}_${Math.floor(Math.random() * 1000)}.${extension}`;
-
-                supabaseUrl = await this.supabaseStorage.uploadFile(buffer, filename, mime);
+                fileName = `upload_${Date.now()}_${Math.floor(Math.random() * 1000)}.${extension}`;
+                supabaseUrl = await this.supabaseStorage.uploadFile(buffer, fileName, mime);
             } catch (storageErr) {
-                this.logger.warn(`Failed to upload to Supabase, processing will continue locally: ${storageErr.message}`);
+                this.logger.warn(`Failed to upload to Supabase: ${storageErr.message}`);
             }
 
             let pages = 1;
@@ -82,7 +83,7 @@ export class WhatsappService {
                 pages = 1;
             }
 
-            return { pages, supabaseUrl, bufferLocation: supabaseUrl }; // keep object flexible
+            return { pages, supabaseUrl, fileName };
         } catch (error) {
             this.logger.error(`Failed to parse pages, defaulting to 1: ${error.message}`);
             return { pages: 1 };
@@ -95,54 +96,47 @@ export class WhatsappService {
         let session = this.userSessions.get(sender);
 
         if (!session) {
-            session = { step: 'AWAITING_FILE', startedAt: Date.now() };
+            session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
             this.userSessions.set(sender, session);
         }
 
         const normalizedMessage = message.trim().toLowerCase();
 
         try {
-            // Check for InteractiveData payload first
+            // Handle InteractiveData for AWAITING_FLOW
             if (interactiveData && session.step === 'AWAITING_FLOW') {
                 this.logger.log(`Received Interactive Flow Response: ${JSON.stringify(interactiveData)}`);
-
-                // Assuming interactiveData looks like: { data: { copies: "2", color: "false", sides: "double" } }
                 const flowInput = interactiveData.data || {};
                 session.copies = flowInput.copies ? parseInt(flowInput.copies, 10) : 1;
                 session.color = flowInput.color === 'true' || flowInput.color === true;
                 session.sides = flowInput.sides === 'double' ? 'double' : 'single';
-
-                // Skip ahead directly to AWAITING_SIDES processing logic to generate payment link cleanly
                 session.step = 'AWAITING_SIDES';
-                // Jump to that block immediately by omitting the 'return null' here
-                // We'll actually construct a helper call or just let it fall through 
-                // Wait, it is cleaner to just run the pricing math here manually rather than falling through.
                 const pricePerPage = session.color ? 10 : 2;
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
-
                 session.step = 'AWAITING_PAYMENT';
                 return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
             }
 
-            // Fallback for AWAITING_FLOW if no interactiveData (e.g. testing on Telegram)
+            // Fallback for AWAITING_FLOW on non-Meta channels
             if (session.step === 'AWAITING_FLOW' && !interactiveData) {
-                // Return to normal flow or handle specific commands
                 if (normalizedMessage === 'reset' || normalizedMessage === 'start') {
                     session.step = 'AWAITING_FILE';
                     session.useFlow = false;
+                    session.files = [];
                     await this.sendTextMessage(sender, "Session reset. Please send your document.");
                     return null;
                 }
-
-                // If they just type something, send them back to the list-based questions
-                // to avoid being permanently stuck in AWAITING_FLOW on non-Meta channels.
                 session.step = 'AWAITING_COPIES';
                 await this.sendTextMessage(sender, "Since you are in text mode, let's continue with manual settings.");
                 await this.sendContentMessage(sender, 'cf_copies_list');
                 return null;
             }
 
+            // ═══════════════════════════════════════════
+            // AWAITING_FILE — supports multiple file uploads
+            // ═══════════════════════════════════════════
             if (session.step === 'AWAITING_FILE') {
+                // Handle QR code start command
                 if (normalizedMessage.startsWith('start ')) {
                     const qrToken = normalizedMessage.split(' ')[1];
                     const node = await this.prisma.node.findUnique({
@@ -152,7 +146,7 @@ export class WhatsappService {
                         session.nodeId = node.id;
                         session.nodeCode = node.node_code;
                         await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, `Welcome to CopyFlow @ ${node.name}! Please send a file (PDF/Word/image) to get started.`);
+                        await this.sendTextMessage(sender, `Welcome to CopyFlow @ ${node.name}! Please send your files (PDF/Word/image) to get started.`);
                     } else {
                         await this.sendTextMessage(sender, "Invalid or expired QR code. Please scan a valid shop QR code.");
                     }
@@ -162,32 +156,24 @@ export class WhatsappService {
                 if (normalizedMessage === 'hi-flow') {
                     session.useFlow = true;
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, "Interactive Flow mode activated! Please upload your document to begin.");
+                    await this.sendTextMessage(sender, "Interactive Flow mode activated! Please upload your documents to begin.");
                     return null;
                 }
 
-                if (mediaUrl) {
-                    await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, "Analyzing your document...");
-
-                    await this.sendTypingIndicator(sender);
-                    const { pages, supabaseUrl } = await this.getPageCount(mediaUrl, mediaContentType);
-
-                    session.pages = pages;
-                    // Replace the Twilio mediaUrl format with our permanent Supabase URL
-                    if (supabaseUrl) {
-                        session.fileUrl = supabaseUrl;
-                    } else {
-                        session.fileUrl = mediaUrl; // Fallback to raw Twilio URL if upload fails
+                // User taps "Done" — move to copies selection
+                if (normalizedMessage === 'done' || normalizedMessage === 'done_uploading') {
+                    if (session.files.length === 0) {
+                        await this.sendTextMessage(sender, "You haven't uploaded any files yet. Please send a file first.");
+                        return null;
                     }
+
+                    // Calculate total pages
+                    session.pages = session.files.reduce((sum, f) => sum + f.pages, 0);
 
                     if (session.useFlow) {
                         session.step = 'AWAITING_FLOW';
                         await this.sendTypingIndicator(sender);
-                        // Send the interactive flow template/prompt here. 
-                        // Note: For Twilio Sandbox without a configured meta template, this is just a simulated instruction.
-                        await this.sendTextMessage(sender, "Please open the Interactive Print Form that normally appears here, select your settings, and submit.");
-                        // NATIVE WhatsApp FLow API Template: await this.sendContentMessage(sender, 'cf_native_flow_template');
+                        await this.sendTextMessage(sender, "Please open the Interactive Print Form, select your settings, and submit.");
                         return null;
                     }
 
@@ -197,14 +183,43 @@ export class WhatsappService {
                     return null;
                 }
 
-                // If it's the very first message
+                // User sends a file
+                if (mediaUrl) {
+                    await this.sendTypingIndicator(sender);
+                    const fileNum = session.files.length + 1;
+                    await this.sendTextMessage(sender, `📄 Analyzing file ${fileNum}...`);
+
+                    await this.sendTypingIndicator(sender);
+                    const { pages, supabaseUrl, fileName } = await this.getPageCount(mediaUrl, mediaContentType);
+
+                    const fileEntry: UploadedFile = {
+                        url: supabaseUrl || mediaUrl,
+                        pages,
+                        name: fileName || `file_${fileNum}`,
+                    };
+                    session.files.push(fileEntry);
+
+                    const totalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
+                    const fileCount = session.files.length;
+
+                    await this.sendTypingIndicator(sender);
+                    await this.sendContentMessage(sender, 'cf_file_uploaded', {
+                        fileNum,
+                        pages,
+                        totalPages,
+                        fileCount,
+                    });
+                    return null;
+                }
+
+                // First message — welcome
                 try {
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, 'Welcome to CopyFlow! Please send a file (PDF/Word/image) to get started. \n\n(Tip: Type "hi-flow" to enable the experimental WhatsApp Flow mode)');
+                    await this.sendTextMessage(sender, 'Welcome to CopyFlow! 🖨️\n\nSend your files (PDF/Word/image) to get started.\nYou can send multiple files — tap "Done" when finished.');
                     return null;
                 } catch (err) {
-                    this.logger.error(`Hit Twilio Limit: ${err.message}. Falling back to normal XML.`);
-                    return 'Welcome to CopyFlow! Please send a file (PDF/Word/image) to get started.';
+                    this.logger.error(`Send error: ${err.message}`);
+                    return 'Welcome to CopyFlow! Send your files (PDF/Word/image) to get started.';
                 }
             }
 
@@ -292,7 +307,6 @@ export class WhatsappService {
             }
         } catch (globalError: any) {
             this.logger.error(`Error processing message: ${globalError.message}`);
-            // Let the caller (Bull queue processor) handle failures
             throw globalError;
         }
     }
@@ -308,16 +322,20 @@ export class WhatsappService {
             await this.sendTypingIndicator(sender);
             this.logger.log('Creating payment link via razorpayService...');
             const isColorStr = session.color ? 'Color' : 'Black and White';
+            const fileCount = session.files.length;
+            const description = `Print job (${fileCount} file${fileCount > 1 ? 's' : ''}, ${session.copies || 1}x ${session.sides} ${isColorStr})`;
+
             const paymentLinkObj = await this.razorpayService.createPaymentLink(
                 session.price as number,
                 referenceId,
-                `Print job (${session.copies || 1}x ${session.sides} ${isColorStr})`,
+                description,
                 cleanedPhone
             );
 
             session.paymentLink = paymentLinkObj.short_url;
 
-            const msg = `Your document has ${session.pages || 1} pages.\nTotal: ${session.pages || 1} pages x ${session.copies || 1} copies x Rs. ${pricePerPage} = Rs. ${session.price}\n\nPlease pay here to confirm your job: ${session.paymentLink}\n\nWe will start printing once payment is confirmed.`;
+            const filesText = fileCount > 1 ? `${fileCount} files, ${session.pages || 1} total pages` : `${session.pages || 1} pages`;
+            const msg = `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total: ₹${session.price}\n\n🔗 Pay here: ${session.paymentLink}\n\nWe will start printing once payment is confirmed.`;
             try {
                 await this.sendTypingIndicator(sender);
                 await this.sendTextMessage(sender, msg);
@@ -354,22 +372,23 @@ export class WhatsappService {
         this.logger.log(`Telling student (${sender}) that job is printing...`);
 
         const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
-
-        // Grab session data before deleting it to extract file dependency
         const session = this.userSessions.get(to) || this.userSessions.get(sender);
 
-        if (session && session.fileUrl && session.fileUrl.includes('supabase.co')) {
-            // Delete the file from bucket as requested after printing
-            try {
-                // Extract filename from the end of the URL
-                const urlParts = session.fileUrl.split('/');
-                const filename = urlParts[urlParts.length - 1]; // E.g., upload_1234_abc.pdf
-
-                if (filename) {
-                    await this.supabaseStorage.deleteFile(filename);
+        // Cleanup ALL uploaded files from Supabase
+        if (session && session.files && session.files.length > 0) {
+            for (const file of session.files) {
+                if (file.url && file.url.includes('supabase.co')) {
+                    try {
+                        const urlParts = file.url.split('/');
+                        const filename = urlParts[urlParts.length - 1];
+                        if (filename) {
+                            await this.supabaseStorage.deleteFile(filename);
+                            this.logger.log(`Cleaned up Supabase file: ${filename}`);
+                        }
+                    } catch (e) {
+                        this.logger.warn(`Failed to cleanup file ${file.name}: ${e.message}`);
+                    }
                 }
-            } catch (e) {
-                this.logger.warn(`Failed to cleanup Supabase File gracefully: ${e.message}`);
             }
         }
 
