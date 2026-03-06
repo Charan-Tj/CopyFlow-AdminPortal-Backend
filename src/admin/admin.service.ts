@@ -82,31 +82,35 @@ export class AdminService {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        const [kiosksCount, jobsToday, revenueTodayRaw, alertsCount, nodes] = await Promise.all([
+        // Run ALL queries in parallel — each saves ~200-300ms of cross-region latency
+        const [kiosksCount, jobsToday, revenueTodayRaw, alertsCount, nodes, failedPayments, avgPages] = await Promise.all([
             this.prisma.kiosk.count(),
             this.prisma.printJob.count({
-                where: {
-                    createdAt: { gte: today },
-                },
+                where: { createdAt: { gte: today } },
             }),
             this.prisma.printJob.aggregate({
                 _sum: { payable_amount: true },
-                where: {
-                    status: 'PAID',
-                    createdAt: { gte: today },
-                },
+                where: { status: 'PAID', createdAt: { gte: today } },
             }),
             this.prisma.kiosk.count({
                 where: { paper_level: { not: 'HIGH' } },
             }),
             this.prisma.node.findMany({
                 include: {
-                    kiosks: true,
+                    kiosks: { select: { last_heartbeat: true } },
                     jobs: {
-                        where: { createdAt: { gte: today } }
+                        where: { createdAt: { gte: today } },
+                        select: { status: true, payable_amount: true }
                     }
                 }
-            })
+            }),
+            this.prisma.printJob.count({
+                where: { status: 'FAILED', createdAt: { gte: today } }
+            }),
+            this.prisma.printJob.aggregate({
+                _avg: { page_count: true },
+                where: { createdAt: { gte: today } }
+            }),
         ]);
 
         const nodesBreakdown = nodes.map(n => {
@@ -114,19 +118,12 @@ export class AdminService {
             const nodeRevenueToday = n.jobs
                 .filter(j => j.status === 'PAID')
                 .reduce((sum, j) => sum + Number(j.payable_amount), 0);
-
-            // Check if any kiosk had heartbeat in last 60 seconds
             const isOnline = n.kiosks.some(k =>
                 (new Date().getTime() - k.last_heartbeat.getTime()) < 60000
             );
-
             return {
-                id: n.id,
-                node_code: n.node_code,
-                name: n.name,
-                jobs_today: nodeJobsToday,
-                revenue_today: nodeRevenueToday,
-                is_online: isOnline
+                id: n.id, node_code: n.node_code, name: n.name,
+                jobs_today: nodeJobsToday, revenue_today: nodeRevenueToday, is_online: isOnline
             };
         });
 
@@ -135,14 +132,9 @@ export class AdminService {
             jobsToday,
             revenueToday: revenueTodayRaw._sum.payable_amount || 0,
             alerts: alertsCount,
-            failedPaymentsToday: await this.prisma.printJob.count({
-                where: { status: 'FAILED', createdAt: { gte: today } }
-            }),
-            abandonedSessions: this.whatsappService.getSessions().length, // approximate
-            averagePagesPerJob: await this.prisma.printJob.aggregate({
-                _avg: { page_count: true },
-                where: { createdAt: { gte: today } }
-            }).then(res => res._avg.page_count || 0),
+            failedPaymentsToday: failedPayments,
+            abandonedSessions: this.whatsappService.getSessions().length,
+            averagePagesPerJob: avgPages._avg.page_count || 0,
             nodes: nodesBreakdown
         };
     }
