@@ -5,15 +5,15 @@ import axios from 'axios';
 import { WhatsappQueueService } from '../whatsapp.queue';
 
 /**
- * Telegram Provider
- * Implements the WhatsappProvider interface to allow testing the CopyFlow backend via Telegram 
- * entirely for free without rate limits.
+ * Telegram Provider (Webhook Mode)
+ * Uses Telegram webhooks instead of long-polling for instant, conflict-free message delivery.
+ * Telegram POSTs updates to: {BACKEND_URL}/whatsapp/telegram-webhook
  */
 @Injectable()
 export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(TelegramProvider.name);
     private static bot: Telegraf | null = null;
-    private static isLaunched = false;
+    private static isInitialized = false;
 
     constructor(
         @Inject(forwardRef(() => WhatsappQueueService))
@@ -29,53 +29,62 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         } else if (!token) {
             this.logger.warn('TELEGRAM_BOT_TOKEN not found! Telegram provider will not receive messages.');
         } else if (TelegramProvider.bot) {
-            // Re-setup listeners for the new instance 
             this.setupListeners();
         }
     }
 
     async onModuleInit() {
-        if (TelegramProvider.bot && !TelegramProvider.isLaunched) {
-            TelegramProvider.isLaunched = true;
-            this.launchWithRetry(3, 5000);
-            this.logger.log('🚀 Telegram Provider initialized');
-        }
-    }
+        if (TelegramProvider.bot && !TelegramProvider.isInitialized) {
+            TelegramProvider.isInitialized = true;
 
-    private async launchWithRetry(maxRetries: number, delayMs: number) {
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL
+                || `${process.env.BACKEND_URL || 'https://copyflow-backend-omzk.onrender.com'}/whatsapp/telegram-webhook`;
+
             try {
-                // Do NOT await indefinitely — launch() is a long-polling loop
-                TelegramProvider.bot!.launch({ dropPendingUpdates: true })
-                    .then(() => this.logger.log('🚀 Telegram Bot launched successfully (in background)'))
-                    .catch((e: any) => {
-                        this.logger.error(`Telegram polling stopped: ${e.message}`);
-                        TelegramProvider.isLaunched = false;
-                    });
-                this.logger.log(`Telegram Bot launch initiated (attempt ${attempt}/${maxRetries})`);
-                return; // Successfully started
+                // First, delete any existing webhook or stop polling
+                await TelegramProvider.bot.telegram.deleteWebhook({ drop_pending_updates: true });
+
+                // Set the new webhook
+                await TelegramProvider.bot.telegram.setWebhook(webhookUrl, {
+                    drop_pending_updates: true,
+                    allowed_updates: ['message', 'callback_query'],
+                });
+
+                this.logger.log(`🚀 Telegram Webhook set: ${webhookUrl}`);
+
+                // Verify it was set
+                const info = await TelegramProvider.bot.telegram.getWebhookInfo();
+                this.logger.log(`📡 Webhook info: url=${info.url}, pending=${info.pending_update_count}`);
             } catch (e: any) {
-                this.logger.error(`Telegram launch attempt ${attempt} failed: ${e.message}`);
-                if (attempt < maxRetries) {
-                    this.logger.log(`Retrying in ${delayMs / 1000}s...`);
-                    await new Promise(r => setTimeout(r, delayMs));
-                    delayMs *= 2; // Exponential backoff
-                } else {
-                    this.logger.error('All Telegram launch attempts exhausted. Bot will not receive messages.');
-                    TelegramProvider.isLaunched = false;
-                }
+                this.logger.error(`Failed to set Telegram webhook: ${e.message}`);
+                TelegramProvider.isInitialized = false;
             }
         }
     }
 
     async onModuleDestroy() {
-        if (TelegramProvider.bot && TelegramProvider.isLaunched) {
-            this.logger.log('Stopping Telegram Bot gracefully...');
-            try {
-                TelegramProvider.bot.stop('SIGINT');
-            } catch (e) { }
-            TelegramProvider.isLaunched = false;
+        // Don't remove the webhook on shutdown — Render restarts quickly
+        // and we want Telegram to queue messages during restart
+        this.logger.log('Telegram Provider shutting down (webhook remains active)');
+    }
+
+    /**
+     * Called by the WhatsappController when Telegram POSTs an update to /whatsapp/telegram-webhook.
+     * Feeds the raw update into Telegraf so our listeners fire.
+     */
+    async handleWebhookUpdate(update: any): Promise<void> {
+        if (!TelegramProvider.bot) {
+            this.logger.warn('Received webhook update but bot is not initialized');
+            return;
         }
+        await TelegramProvider.bot.handleUpdate(update);
+    }
+
+    /**
+     * Expose the bot instance for direct access if needed 
+     */
+    static getBot(): Telegraf | null {
+        return TelegramProvider.bot;
     }
 
     private setupListeners() {
@@ -171,16 +180,10 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
     }
 
     async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any }> {
-        // Since Telegram uses long polling built into Telegraf (not an explicit HTTP webhook),
-        // we pass `{ type, ctx }` manually from our setupListeners method into this parser.
-
         try {
             if (!body.ctx) return { sender: '', message: '' };
             const ctx: Context = body.ctx;
 
-            // Telegram uses chat IDs (numbers), but our backend treats them as phone strings.
-            // We spoof the string to look like a Whatsapp Phone number so Razorpay accepts it.
-            // Example: ChatId 1234567 -> sender will be "whatsapp:+1234567"
             const chatId = ctx.from?.id;
             if (!chatId) return { sender: '', message: '' };
 
@@ -195,18 +198,15 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 if (msg.text) {
                     message = msg.text;
                 } else if (msg.document) {
-                    // Telegram sends documents in a specific structure
                     mediaUrl = msg.document.file_id;
                     mediaContentType = msg.document.mime_type || 'application/pdf';
                 } else if (msg.photo && msg.photo.length > 0) {
-                    // Telegram sends multiple sizes of photos, we take the largest
                     const photo = msg.photo[msg.photo.length - 1];
                     mediaUrl = photo.file_id;
                     mediaContentType = 'image/jpeg';
                 }
             } else if (body.type === 'callback') {
                 const cbQuery = ctx.callbackQuery as any;
-                // Treat button clicks exactly as text responses naturally!
                 message = cbQuery.data || '';
             }
 

@@ -1,7 +1,8 @@
-import { Controller, Post, Get, Body, Query, Header, Logger, Inject } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Header, Logger, Inject, HttpCode } from '@nestjs/common';
 import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 import { WhatsappQueueService } from './whatsapp.queue';
+import { TelegramProvider } from './providers/telegram.provider';
 
 @Controller('whatsapp')
 export class WhatsappController {
@@ -9,12 +10,12 @@ export class WhatsappController {
 
   constructor(
     @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider,
-    private readonly whatsappQueue: WhatsappQueueService
+    private readonly whatsappQueue: WhatsappQueueService,
+    private readonly telegramProvider: TelegramProvider
   ) { }
 
   /**
-   * Controller for Meta Webhook Verification
-   * Accepts GET requests from Meta Developer Portal for webhook setup
+   * Meta Webhook Verification (GET)
    */
   @Get()
   verifyWebhook(
@@ -32,19 +33,16 @@ export class WhatsappController {
   }
 
   /**
-   * Controller for WhatsApp Webhook
-   * Accepts POST requests and interacts with BullMQ for async processing
+   * Twilio/Meta WhatsApp Webhook (POST)
    */
   @Post()
   @Header('Content-Type', 'text/xml')
   async handleIncomingMessage(@Body() body: any) {
     this.logger.log('Received webhook from WhatsApp Provider');
 
-    // Parse the payload depending on the provider (Twilio, Meta, etc.)
     const parsedData = await this.whatsappProvider.parseIncomingWebhook(body);
 
     if (parsedData.sender) {
-      // Enqueue the job for instant webhook 200 OK response
       await this.whatsappQueue.add('process-incoming', parsedData, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 2000 }
@@ -54,8 +52,23 @@ export class WhatsappController {
       this.logger.warn('Failed to parse webhook payload or sender missing');
     }
 
-    // Return empty TwiML or 200 OK equivalent to prevent provider timeouts. 
-    // This is required for Twilio, and successfully returns 200 OK for standard JSON APIs like Meta.
     return `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`.trim();
+  }
+
+  /**
+   * Telegram Webhook Endpoint (POST)
+   * Telegram sends updates here instead of us polling.
+   * Must return 200 quickly or Telegram will retry.
+   */
+  @Post('telegram-webhook')
+  @HttpCode(200)
+  async handleTelegramWebhook(@Body() body: any) {
+    this.logger.log('📩 Received Telegram webhook update');
+    try {
+      await this.telegramProvider.handleWebhookUpdate(body);
+    } catch (e: any) {
+      this.logger.error(`Error processing Telegram webhook: ${e.message}`);
+    }
+    return { ok: true };
   }
 }
