@@ -49,7 +49,8 @@ export class PaymentService {
 
         if (session) {
             const jobData = {
-                fileUrl: session.fileUrl,
+                fileUrl: session.files?.length > 0 ? session.files[0].url : undefined,
+                files: session.files || [],
                 copies: session.copies,
                 color: session.color,
                 sides: session.sides,
