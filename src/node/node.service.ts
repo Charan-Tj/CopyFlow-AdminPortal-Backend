@@ -123,7 +123,7 @@ export class NodeService {
             };
         }));
 
-        return jobsWithUrls;
+        return { jobs: jobsWithUrls };
     }
 
     async acknowledgeJob(nodeId: string, jobId: string) {
