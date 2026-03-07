@@ -223,6 +223,16 @@ export class WhatsappService {
         const normalizedMessage = message.trim().toLowerCase();
 
         try {
+            // ─── Global cancel/reset: works at ANY step ───────────────
+            if (normalizedMessage === 'cancel' || normalizedMessage === 'reset' || normalizedMessage === 'restart' || normalizedMessage === '/cancel' || normalizedMessage === '/reset' || normalizedMessage === '/start') {
+                await this.deleteSession(sender);
+                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
+                await this.saveSession(sender, session);
+                await this.sendTypingIndicator(sender);
+                await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.');
+                return null;
+            }
+
             // Handle InteractiveData for AWAITING_FLOW
             if (interactiveData && session.step === 'AWAITING_FLOW') {
                 this.logger.log(`Received Interactive Flow Response: ${JSON.stringify(interactiveData)}`);
@@ -447,7 +457,8 @@ export class WhatsappService {
             const referenceId = `wa_${Date.now()}`;
             session.jobId = referenceId;
             session.sender = sender;
-            const cleanedPhone = sender.replace('whatsapp:', '');
+            // Strip any platform prefix (whatsapp:, telegram:, etc.) to get a clean phone number
+            const cleanedPhone = sender.replace(/^(whatsapp:|telegram:)/, '');
 
             await this.sendTypingIndicator(sender);
             this.logger.log('Creating payment link via razorpayService...');
