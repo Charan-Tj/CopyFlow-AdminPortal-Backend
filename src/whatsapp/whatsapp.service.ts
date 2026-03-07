@@ -229,7 +229,73 @@ export class WhatsappService {
                 session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
-                await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.');
+                await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.\n\nTo select a shop, type: shop <shop_code>');
+                return null;
+            }
+
+            // ─── Global shop selection: works at ANY step ───────────────
+            if (normalizedMessage.startsWith('shop ')) {
+                const shopCode = message.trim().split(/\s+/)[1]?.toUpperCase();
+                if (!shopCode) {
+                    await this.sendTextMessage(sender, '❓ Please type: shop <shop_code>\nExample: shop TESTNODE1');
+                    return null;
+                }
+
+                const node = await this.prisma.node.findFirst({
+                    where: {
+                        node_code: { equals: shopCode, mode: 'insensitive' },
+                        is_active: true,
+                    },
+                });
+
+                if (node) {
+                    session.nodeId = node.id;
+                    session.nodeCode = node.node_code;
+                    await this.saveSession(sender, session);
+                    await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, `✅ Selected shop: ${node.name} (${node.node_code})\n${node.college}, ${node.city}\n\nYou can now send your files to print.`);
+                } else {
+                    // List available shops
+                    const activeNodes = await this.prisma.node.findMany({
+                        where: { is_active: true },
+                        select: { node_code: true, name: true, college: true, city: true },
+                        take: 10,
+                    });
+
+                    let msg = `❌ Shop code "${shopCode}" not found.`;
+                    if (activeNodes.length > 0) {
+                        msg += '\n\n📍 Available shops:';
+                        for (const n of activeNodes) {
+                            msg += `\n• ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
+                        }
+                        msg += '\n\nType: shop <code> to select one.';
+                    }
+                    await this.sendTextMessage(sender, msg);
+                }
+                return null;
+            }
+
+            // ─── List shops command ───────────────
+            if (normalizedMessage === 'shops' || normalizedMessage === '/shops') {
+                const activeNodes = await this.prisma.node.findMany({
+                    where: { is_active: true },
+                    select: { node_code: true, name: true, college: true, city: true },
+                    take: 10,
+                });
+
+                if (activeNodes.length === 0) {
+                    await this.sendTextMessage(sender, '😕 No shops are currently available.');
+                } else {
+                    let msg = '📍 Available shops:';
+                    for (const n of activeNodes) {
+                        msg += `\n• ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
+                    }
+                    msg += '\n\nType: shop <code> to select one.';
+                    if (session.nodeId) {
+                        msg += `\n\n✅ Currently selected: ${session.nodeCode}`;
+                    }
+                    await this.sendTextMessage(sender, msg);
+                }
                 return null;
             }
 
@@ -348,7 +414,10 @@ export class WhatsappService {
                 // First message — welcome
                 try {
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, 'Welcome to CopyFlow! 🖨️\n\nSend your files (PDF/Word/image) to get started.\nYou can send multiple files — tap "Done" when finished.');
+                    const shopHint = session.nodeId
+                        ? `\n🏪 Shop: ${session.nodeCode}`
+                        : '\n\n💡 To select a shop, type: shop <code>\n📍 To see available shops, type: shops';
+                    await this.sendTextMessage(sender, `Welcome to CopyFlow! 🖨️\n\nSend your files (PDF/Word/image) to get started.\nYou can send multiple files — tap "Done" when finished.${shopHint}`);
                     return null;
                 } catch (err) {
                     this.logger.error(`Send error: ${err.message}`);
