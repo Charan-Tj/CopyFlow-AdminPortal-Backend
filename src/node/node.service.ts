@@ -129,8 +129,17 @@ export class NodeService {
     async acknowledgeJob(nodeId: string, jobId: string) {
         const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
 
-        if (!job || job.node_id !== nodeId) {
-            throw new Error('Job not found or unauthorized');
+        if (!job) {
+            throw new NotFoundException(`Job ${jobId} not found`);
+        }
+
+        if (job.node_id !== nodeId) {
+            throw new NotFoundException('Job not found or unauthorized');
+        }
+
+        // Idempotent: if already printed, just return success
+        if (job.status === 'PRINTED') {
+            return { success: true, status: 'PRINTED', alreadyAcknowledged: true };
         }
 
         await this.prisma.printJob.update({
@@ -157,7 +166,7 @@ export class NodeService {
         const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
 
         if (!job || job.node_id !== nodeId) {
-            throw new Error('Job not found or unauthorized');
+            throw new NotFoundException('Job not found or unauthorized');
         }
 
         const now = new Date();
