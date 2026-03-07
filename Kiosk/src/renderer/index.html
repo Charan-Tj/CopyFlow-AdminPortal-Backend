@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CopyFlow Print Agent</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <!-- ── Registration Overlay ────────────────────────────────────────── -->
+    <div id="registrationOverlay" class="reg-overlay" style="display:none;">
+      <div class="reg-card">
+        <div class="reg-logo">CopyFlow Print Agent</div>
+        <h2>Node Setup</h2>
+        <p class="reg-subtitle">Enter the one-time registration code provided by your CopyFlow administrator.</p>
+
+        <div class="reg-step" id="regStepCode">
+          <label>Registration Code</label>
+          <div class="reg-row">
+            <input id="regCodeInput" type="text" placeholder="CF-AIt01-X7K2P9" autocomplete="off" spellcheck="false" />
+            <button id="regValidateBtn" class="btn">Validate</button>
+          </div>
+          <div id="regCodeError" class="reg-error" style="display:none;"></div>
+        </div>
+
+        <div class="reg-step" id="regStepPreview" style="display:none;">
+          <div class="reg-node-preview" id="regNodePreview"></div>
+
+          <label>Operator Email</label>
+          <input id="regEmailInput" type="email" placeholder="ait-pune@copyflow.in" autocomplete="off" />
+
+          <label>Create Password</label>
+          <input id="regPasswordInput" type="password" placeholder="Minimum 8 characters" />
+
+          <label>Confirm Password</label>
+          <input id="regPasswordConfirm" type="password" placeholder="Repeat password" />
+
+          <div id="regRegisterError" class="reg-error" style="display:none;"></div>
+
+          <div class="reg-actions">
+            <button id="regBackBtn" class="btn secondary">Back</button>
+            <button id="regRegisterBtn" class="btn">Register &amp; Start</button>
+          </div>
+        </div>
+
+        <div class="reg-step" id="regStepWorking" style="display:none;">
+          <div class="reg-spinner"></div>
+          <p id="regWorkingMsg">Registering…</p>
+        </div>
+      </div>
+    </div>
+    <!-- ── End Registration Overlay ─────────────────────────────────────── -->
+    <header class="topbar">
+      <h1>CopyFlow Print Agent</h1>
+      <div id="healthSummary" class="health"></div>
+    </header>
+
+    <main class="layout">
+      <section class="cards" id="summaryCards"></section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Printers</h2>
+            <button id="addMockJobBtn" class="btn">Add Mock Job</button>
+          </div>
+          <div id="printersList" class="printers-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Queue</h2>
+            <select id="queuePrinterFilter"></select>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Job ID</th>
+                  <th>Printer</th>
+                  <th>File</th>
+                  <th>Owner</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="queueTableBody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Recent Jobs</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Job ID</th>
+                  <th>Printer</th>
+                  <th>Status</th>
+                  <th>Pages</th>
+                  <th>Duration</th>
+                  <th>Completed</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody id="recentJobsTableBody"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Alerts</h2>
+          </div>
+          <div id="alertsList" class="alerts-list"></div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Live Logs</h2>
+        </div>
+        <pre id="logsPanel" class="logs"></pre>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
