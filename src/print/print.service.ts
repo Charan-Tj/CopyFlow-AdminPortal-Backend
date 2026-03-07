@@ -58,7 +58,7 @@ export class PrintService {
                     job_id: jobData.jobId,
                     node_id: jobData.nodeId,
                     kiosk_id: dummyKioskId,
-                    phone_number: jobData.sender.replace('whatsapp:', ''),
+                    phone_number: jobData.sender.replace(/^(whatsapp:|telegram:)/, ''),
                     copies: jobData.copies || 1,
                     sides: jobData.sides || 'single',
                     file_url: jobData.fileUrl,
