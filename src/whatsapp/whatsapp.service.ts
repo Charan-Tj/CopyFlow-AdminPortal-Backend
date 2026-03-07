@@ -4,8 +4,10 @@ import axios from 'axios';
 import * as mammoth from 'mammoth';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
+import { TelegramProvider } from './providers/telegram.provider';
+import { MetaProvider } from './providers/meta.provider';
+import { TwilioProvider } from './providers/twilio.provider';
 const pdfParse = require('pdf-parse');
 
 interface UploadedFile {
@@ -27,6 +29,7 @@ interface ChatState {
     paymentLink?: string;
     jobId?: string;
     sender?: string;
+    platform?: 'telegram' | 'meta' | 'twilio';
     useFlow?: boolean;
     startedAt?: number;
 }
@@ -42,8 +45,28 @@ export class WhatsappService {
         @Inject(forwardRef(() => RazorpayService)) private readonly razorpayService: RazorpayService,
         private readonly supabaseStorage: SupabaseStorageService,
         private readonly prisma: PrismaService,
-        @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider
+        private readonly telegramProvider: TelegramProvider,
+        private readonly metaProvider: MetaProvider,
+        private readonly twilioProvider: TwilioProvider
     ) { }
+
+    /**
+     * Route to the correct provider based on sender prefix.
+     * telegram:xxx  → TelegramProvider
+     * whatsapp:xxx  → MetaProvider (or Twilio, based on env)
+     * fallback      → MetaProvider
+     */
+    private resolveProvider(sender: string): WhatsappProvider {
+        if (sender.startsWith('telegram:')) {
+            return this.telegramProvider;
+        }
+        // For whatsapp: senders, pick meta or twilio based on env
+        const whatsappBackend = process.env.WHATSAPP_PROVIDER || 'meta';
+        if (whatsappBackend === 'twilio') {
+            return this.twilioProvider;
+        }
+        return this.metaProvider;
+    }
 
     // ─── Session persistence helpers ─────────────────────────────────
 
@@ -123,15 +146,15 @@ export class WhatsappService {
     }
 
     private async sendContentMessage(to: string, contentSid: string, variables: any = {}) {
-        await this.whatsappProvider.sendContentMessage(to, contentSid, variables);
+        await this.resolveProvider(to).sendContentMessage(to, contentSid, variables);
     }
 
     private async sendTextMessage(to: string, body: string) {
-        await this.whatsappProvider.sendTextMessage(to, body);
+        await this.resolveProvider(to).sendTextMessage(to, body);
     }
 
     private async sendTypingIndicator(to: string) {
-        await this.whatsappProvider.sendTypingIndicator(to);
+        await this.resolveProvider(to).sendTypingIndicator(to);
     }
 
     /**
@@ -153,9 +176,9 @@ export class WhatsappService {
         return parts.length > 1 ? parts[1].split(';')[0] : 'bin';
     }
 
-    private async getPageCount(mediaUrl: string, mediaContentType?: string): Promise<{ pages: number; supabaseUrl?: string; fileName?: string }> {
+    private async getPageCount(sender: string, mediaUrl: string, mediaContentType?: string): Promise<{ pages: number; supabaseUrl?: string; fileName?: string }> {
         try {
-            const buffer = await this.whatsappProvider.downloadMedia(mediaUrl);
+            const buffer = await this.resolveProvider(sender).downloadMedia(mediaUrl);
             const mime = (mediaContentType || 'application/octet-stream').toLowerCase();
 
             let supabaseUrl: string | undefined;
@@ -289,7 +312,7 @@ export class WhatsappService {
                     await this.sendTextMessage(sender, `📄 Analyzing file ${fileNum}...`);
 
                     await this.sendTypingIndicator(sender);
-                    const { pages, supabaseUrl, fileName } = await this.getPageCount(mediaUrl, mediaContentType);
+                    const { pages, supabaseUrl, fileName } = await this.getPageCount(sender, mediaUrl, mediaContentType);
 
                     const fileEntry: UploadedFile = {
                         url: supabaseUrl || mediaUrl,
@@ -467,16 +490,20 @@ export class WhatsappService {
     }
 
     getSession(sender: string): ChatState | undefined {
-        const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
-        return this.sessionCache.get(to) || this.sessionCache.get(sender);
+        // Try exact match first, then try with whatsapp: prefix for legacy callers
+        return this.sessionCache.get(sender)
+            || this.sessionCache.get(`whatsapp:${sender.replace('whatsapp:', '')}`)
+            || this.sessionCache.get(`telegram:${sender.replace('telegram:', '')}`);
     }
 
     /**
      * Async version that checks DB when cache is empty (e.g. after restart).
      */
     async getSessionAsync(sender: string): Promise<ChatState | undefined> {
-        const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
-        return (await this.loadSession(to)) || (await this.loadSession(sender));
+        // Try exact match, then try platform-prefixed variants
+        return (await this.loadSession(sender))
+            || (await this.loadSession(`whatsapp:${sender.replace('whatsapp:', '')}`))
+            || (await this.loadSession(`telegram:${sender.replace('telegram:', '')}`));
     }
 
     async getSessions(): Promise<any[]> {
@@ -490,7 +517,8 @@ export class WhatsappService {
     async tellStudentJobIsPrinting(sender: string): Promise<boolean> {
         this.logger.log(`Telling student (${sender}) that job is printing...`);
 
-        const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
+        // Preserve the sender format as-is — it already has the right prefix
+        const to = sender;
         const session = await this.getSessionAsync(to);
 
         // Cleanup ALL uploaded files from Supabase

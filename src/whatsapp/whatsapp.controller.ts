@@ -1,17 +1,19 @@
 import { Controller, Post, Get, Body, Query, Header, Logger, Inject, HttpCode } from '@nestjs/common';
-import { WHATSAPP_PROVIDER } from './providers/whatsapp-provider.interface';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 import { WhatsappQueueService } from './whatsapp.queue';
 import { TelegramProvider } from './providers/telegram.provider';
+import { MetaProvider } from './providers/meta.provider';
+import { TwilioProvider } from './providers/twilio.provider';
 
 @Controller('whatsapp')
 export class WhatsappController {
   private readonly logger = new Logger(WhatsappController.name);
 
   constructor(
-    @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider,
     private readonly whatsappQueue: WhatsappQueueService,
-    private readonly telegramProvider: TelegramProvider
+    private readonly telegramProvider: TelegramProvider,
+    private readonly metaProvider: MetaProvider,
+    private readonly twilioProvider: TwilioProvider
   ) { }
 
   /**
@@ -34,22 +36,31 @@ export class WhatsappController {
 
   /**
    * Twilio/Meta WhatsApp Webhook (POST)
+   * Auto-detects the format: Meta sends { object: 'whatsapp_business_account', entry: [...] }
+   * Twilio sends form-encoded with Body, From, etc.
    */
   @Post()
   @Header('Content-Type', 'text/xml')
   async handleIncomingMessage(@Body() body: any) {
-    this.logger.log('Received webhook from WhatsApp Provider');
+    this.logger.log('📩 Received WhatsApp webhook');
 
-    const parsedData = await this.whatsappProvider.parseIncomingWebhook(body);
+    // Auto-detect: Meta sends JSON with "object" field, Twilio sends form data
+    const isMeta = body?.object === 'whatsapp_business_account';
+    const provider: WhatsappProvider = isMeta ? this.metaProvider : this.twilioProvider;
+    const providerName = isMeta ? 'Meta' : 'Twilio';
+
+    this.logger.log(`Detected ${providerName} webhook format`);
+
+    const parsedData = await provider.parseIncomingWebhook(body);
 
     if (parsedData.sender) {
       await this.whatsappQueue.add('process-incoming', parsedData, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 2000 }
       });
-      this.logger.log(`Added message from ${parsedData.sender} to processing queue`);
+      this.logger.log(`Added ${providerName} message from ${parsedData.sender} to queue`);
     } else {
-      this.logger.warn('Failed to parse webhook payload or sender missing');
+      this.logger.warn(`Failed to parse ${providerName} webhook payload or sender missing`);
     }
 
     return `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`.trim();

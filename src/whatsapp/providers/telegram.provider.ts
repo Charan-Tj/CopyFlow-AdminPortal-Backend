@@ -109,7 +109,7 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
     }
 
     private formatTo(to: string): number {
-        return parseInt(to.replace('whatsapp:', '').replace('+', ''), 10);
+        return parseInt(to.replace('telegram:', '').replace('whatsapp:', '').replace('+', ''), 10);
     }
 
     async sendTextMessage(to: string, body: string): Promise<void> {
@@ -198,7 +198,7 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
             const chatId = ctx.from?.id;
             if (!chatId) return { sender: '', message: '' };
 
-            const sender = `whatsapp:+${chatId}`;
+            const sender = `telegram:${chatId}`;
             let message = '';
             let mediaUrl = undefined;
             let mediaContentType = undefined;
