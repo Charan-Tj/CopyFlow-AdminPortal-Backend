@@ -223,6 +223,30 @@ export class WhatsappService {
         const normalizedMessage = message.trim().toLowerCase();
 
         try {
+            // ─── Help command ───────────────
+            if (normalizedMessage === 'help' || normalizedMessage === '/help') {
+                await this.sendTypingIndicator(sender);
+                await this.sendTextMessage(sender,
+                    '📖 *CopyFlow Help*\n\n' +
+                    '🖨️ *How to print:*\n' +
+                    '1. Send your files (PDF/Word/image)\n' +
+                    '2. Tap "Done" when finished uploading\n' +
+                    '3. Select copies, color, and sides\n' +
+                    '4. Pay via the Razorpay link\n' +
+                    '5. Your files are printed automatically!\n\n' +
+                    '📋 *Commands:*\n' +
+                    '/start — Start a new print session\n' +
+                    '/shops — List available print shops\n' +
+                    '/cancel — Cancel current session\n' +
+                    '/reset — Reset and start over\n' +
+                    '/help — Show this help message\n\n' +
+                    '🏪 *Shop selection:*\n' +
+                    'Type: shop <code> to select a shop\n' +
+                    'Example: shop TESTNODE1'
+                );
+                return null;
+            }
+
             // ─── Global cancel/reset: works at ANY step ───────────────
             if (normalizedMessage === 'cancel' || normalizedMessage === 'reset' || normalizedMessage === 'restart' || normalizedMessage === '/cancel' || normalizedMessage === '/reset' || normalizedMessage === '/start') {
                 await this.deleteSession(sender);

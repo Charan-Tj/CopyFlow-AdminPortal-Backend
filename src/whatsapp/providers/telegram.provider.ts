@@ -55,6 +55,16 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 // Verify it was set
                 const info = await TelegramProvider.bot.telegram.getWebhookInfo();
                 this.logger.log(`📡 Webhook info: url=${info.url}, pending=${info.pending_update_count}`);
+
+                // Set the bot command menu (shows when user types "/")
+                await TelegramProvider.bot.telegram.setMyCommands([
+                    { command: 'start', description: '🔄 Start a new print session' },
+                    { command: 'shops', description: '📍 List available print shops' },
+                    { command: 'cancel', description: '❌ Cancel current session' },
+                    { command: 'reset', description: '🔄 Reset and start over' },
+                    { command: 'help', description: '❓ How to use CopyFlow' },
+                ]);
+                this.logger.log('📋 Telegram bot command menu set');
             } catch (e: any) {
                 this.logger.error(`Failed to set Telegram webhook: ${e.message}`);
                 TelegramProvider.isInitialized = false;
