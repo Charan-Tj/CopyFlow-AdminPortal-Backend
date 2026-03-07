@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { WhatsappProvider } from './whatsapp-provider.interface';
 import axios from 'axios';
 
@@ -6,11 +6,49 @@ import axios from 'axios';
  * Meta Cloud API Provider
  */
 @Injectable()
-export class MetaProvider implements WhatsappProvider {
+export class MetaProvider implements WhatsappProvider, OnModuleInit {
     private readonly logger = new Logger(MetaProvider.name);
+    private tokenValid = false;
 
     constructor() {
         require('dotenv').config();
+    }
+
+    async onModuleInit() {
+        await this.validateToken();
+    }
+
+    /**
+     * Validate Meta API credentials on startup so we get an immediate,
+     * actionable error instead of silent failures for every message.
+     */
+    private async validateToken(): Promise<void> {
+        const token = process.env.META_ACCESS_TOKEN;
+        const phoneId = process.env.META_PHONE_NUMBER_ID;
+
+        if (!token || !phoneId) {
+            this.logger.error('⚠️  META_ACCESS_TOKEN or META_PHONE_NUMBER_ID is missing from .env — WhatsApp (Meta) will NOT work!');
+            return;
+        }
+
+        try {
+            const res = await axios.get(`https://graph.facebook.com/v18.0/${phoneId}`, {
+                headers: { 'Authorization': `Bearer ${token}` },
+                validateStatus: null,
+            });
+
+            if (res.status === 200) {
+                this.tokenValid = true;
+                const name = res.data?.verified_name || res.data?.display_phone_number || phoneId;
+                this.logger.log(`✅ Meta WhatsApp API credentials valid — Phone: ${name}`);
+            } else {
+                const errMsg = res.data?.error?.message || `HTTP ${res.status}`;
+                this.logger.error(`❌ Meta WhatsApp API credentials INVALID: ${errMsg}`);
+                this.logger.error('👉 Go to https://developers.facebook.com/apps/ → WhatsApp → API Setup to generate a new System User token');
+            }
+        } catch (e: any) {
+            this.logger.error(`❌ Failed to validate Meta token: ${e.message}`);
+        }
     }
 
     private getHeaders() {
@@ -32,27 +70,57 @@ export class MetaProvider implements WhatsappProvider {
     }
 
     async sendTextMessage(to: string, body: string): Promise<void> {
-        try {
-            const payload = {
-                messaging_product: 'whatsapp',
-                recipient_type: 'individual',
-                to: this.formatTo(to),
-                type: 'text',
-                text: { preview_url: false, body }
-            };
+        const payload = {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: this.formatTo(to),
+            type: 'text',
+            text: { preview_url: false, body }
+        };
 
-            await axios.post(this.getApiUrl(), payload, { headers: this.getHeaders() });
+        try {
+            const response = await axios.post(this.getApiUrl(), payload, {
+                headers: this.getHeaders(),
+                validateStatus: null,
+            });
+
+            if (response.status !== 200) {
+                const errDetail = response.data?.error?.message || JSON.stringify(response.data);
+                this.logger.error(`Meta API returned ${response.status}: ${errDetail}`);
+                throw new Error(`Meta API error ${response.status}: ${errDetail}`);
+            }
         } catch (error: any) {
-            this.logger.error(`Error sending Meta text message: ${error.response?.data?.error?.message || error.message}`);
+            if (error.response) {
+                const errDetail = error.response.data?.error?.message || error.message;
+                this.logger.error(`Error sending Meta text message: ${errDetail}`);
+                throw new Error(`Meta send failed: ${errDetail}`);
+            }
+            this.logger.error(`Error sending Meta text message: ${error.message}`);
+            throw error;
         }
     }
 
     async sendContentMessage(to: string, contentSid: string, variables?: any): Promise<void> {
-        // Here we map the logical names we used in Twilio to Meta's native interactive formats.
         try {
             let interactivePayload: any = null;
 
-            if (contentSid === 'cf_copies_list') {
+            if (contentSid === 'cf_file_uploaded') {
+                // Rich file upload confirmation — mirrors the Telegram provider behavior
+                const { fileNum, pages, totalPages, fileCount } = variables || {};
+                const summary = fileCount > 1
+                    ? `✅ File ${fileNum} received — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total: ${fileCount} files, ${totalPages} pages`
+                    : `✅ File received — ${pages} page${pages > 1 ? 's' : ''}`;
+
+                interactivePayload = {
+                    type: "button",
+                    body: { text: `${summary}\n\nSend more files or tap "Done" to continue.` },
+                    action: {
+                        buttons: [
+                            { type: "reply", reply: { id: "done_uploading", title: "✅ Done" } }
+                        ]
+                    }
+                };
+            } else if (contentSid === 'cf_copies_list') {
                 interactivePayload = {
                     type: "list",
                     header: { type: "text", text: "Copies" },
@@ -95,6 +163,10 @@ export class MetaProvider implements WhatsappProvider {
                         ]
                     }
                 };
+            } else if (contentSid === 'cf_print_flow') {
+                // WhatsApp Native Flow — opens a full-screen print settings form
+                await this.sendFlowMessage(to);
+                return;
             } else {
                 this.logger.warn(`Unknown contentSid: ${contentSid}`);
                 await this.sendTextMessage(to, "Please reply manually to select your options.");
@@ -109,18 +181,104 @@ export class MetaProvider implements WhatsappProvider {
                 interactive: interactivePayload
             };
 
-            await axios.post(this.getApiUrl(), payload, { headers: this.getHeaders() });
+            const response = await axios.post(this.getApiUrl(), payload, {
+                headers: this.getHeaders(),
+                validateStatus: null,
+            });
+
+            if (response.status !== 200) {
+                const errDetail = response.data?.error?.message || JSON.stringify(response.data);
+                this.logger.error(`Meta interactive API returned ${response.status}: ${errDetail}`);
+                // Fall back to plain text on interactive failure
+                await this.sendTextMessage(to, "Please reply manually with your selection. (Interactive formatting failed)");
+            }
         } catch (error: any) {
             this.logger.error(`Error sending Meta interactive message: ${error.response?.data?.error?.message || error.message}`);
-            await this.sendTextMessage(to, "Please reply manually with your selection. (Interactive formatting failed)");
+            // Use a simple fallback that doesn't call sendTextMessage again to avoid infinite recursion
+            try {
+                const payload = {
+                    messaging_product: 'whatsapp',
+                    recipient_type: 'individual',
+                    to: this.formatTo(to),
+                    type: 'text',
+                    text: { preview_url: false, body: "Please reply manually with your selection." }
+                };
+                await axios.post(this.getApiUrl(), payload, { headers: this.getHeaders(), validateStatus: null });
+            } catch (fallbackErr) {
+                this.logger.error(`Fallback text also failed for ${to}`);
+            }
         }
     }
 
     async sendTypingIndicator(to: string): Promise<void> {
-        // Meta API requires marking messages as read contextually, 
-        // but there is no explicit "typing..." indicator endpoint for automated bots right now 
-        // that works globally outside of handovers without custom tokens. 
-        // We will just silently return for Meta as they handle read receipts automatically.
+        // Meta API doesn't have a direct "typing" indicator for business bots.
+        // We silently return — this is expected behavior.
+    }
+
+    /**
+     * Send a WhatsApp Native Flow message.
+     * Opens a full-screen interactive form in WhatsApp where the user
+     * selects prints settings (copies, color, sides) in one shot.
+     *
+     * Requires a published WhatsApp Flow with ID set in META_FLOW_ID env var.
+     * Falls back to the standard button-based flow if no flow ID is configured.
+     */
+    async sendFlowMessage(to: string): Promise<void> {
+        const flowId = process.env.META_FLOW_ID;
+
+        if (!flowId) {
+            // No Flow ID configured — fall back to standard interactive buttons
+            this.logger.warn('META_FLOW_ID not set — falling back to standard interactive copy/color/sides buttons');
+            await this.sendContentMessage(to, 'cf_copies_list');
+            return;
+        }
+
+        const payload = {
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: this.formatTo(to),
+            type: 'interactive',
+            interactive: {
+                type: 'flow',
+                header: { type: 'text', text: '🖨️ Print Settings' },
+                body: { text: 'Fill in your print preferences below. We will generate your payment link once you submit.' },
+                footer: { text: 'CopyFlow — Cloud Print Network' },
+                action: {
+                    name: 'flow',
+                    parameters: {
+                        flow_message_version: '3',
+                        flow_token: `cf_flow_${Date.now()}`,
+                        flow_id: flowId,
+                        flow_cta: '⚙️ Open Print Form',
+                        flow_action: 'navigate',
+                        flow_action_payload: {
+                            screen: 'PRINT_SETTINGS'
+                        }
+                    }
+                }
+            }
+        };
+
+        try {
+            const response = await axios.post(this.getApiUrl(), payload, {
+                headers: this.getHeaders(),
+                validateStatus: null,
+            });
+
+            if (response.status !== 200) {
+                const errDetail = response.data?.error?.message || JSON.stringify(response.data);
+                this.logger.error(`Meta Flow API returned ${response.status}: ${errDetail}`);
+                // Fall back to standard interactive buttons
+                this.logger.warn('Falling back to standard interactive buttons due to Flow API error');
+                await this.sendContentMessage(to, 'cf_copies_list');
+            } else {
+                this.logger.log(`✅ WhatsApp Flow message sent to ${to}`);
+            }
+        } catch (error: any) {
+            this.logger.error(`Error sending Meta Flow message: ${error.message}`);
+            // Fall back to standard interactive buttons
+            await this.sendContentMessage(to, 'cf_copies_list');
+        }
     }
 
     private async resolveMediaUrl(mediaId: string): Promise<string | undefined> {
@@ -142,7 +300,15 @@ export class MetaProvider implements WhatsappProvider {
         try {
             const entry = body.entry?.[0];
             const changes = entry?.changes?.[0];
-            const messageObj = changes?.value?.messages?.[0];
+            const value = changes?.value;
+
+            // Ignore status updates (delivery receipts, read receipts, etc.)
+            if (value?.statuses) {
+                this.logger.debug('Ignoring Meta status update (delivery/read receipt)');
+                return { sender: '', message: '' };
+            }
+
+            const messageObj = value?.messages?.[0];
 
             if (!messageObj) {
                 return { sender: '', message: '' };
@@ -174,7 +340,7 @@ export class MetaProvider implements WhatsappProvider {
             } else if (messageObj.type === 'document' || messageObj.type === 'image') {
                 const mediaPayload = messageObj[messageObj.type];
                 if (mediaPayload?.id) {
-                    // Because WhatsApp service uses direct URLs to download internally, 
+                    // Because WhatsApp service uses direct URLs to download internally,
                     // we need to resolve the Graph API URL for it.
                     mediaUrl = await this.resolveMediaUrl(mediaPayload.id);
                     mediaContentType = mediaPayload.mime_type;

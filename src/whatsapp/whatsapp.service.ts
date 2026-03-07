@@ -323,14 +323,13 @@ export class WhatsappService {
                 return null;
             }
 
-            // Handle InteractiveData for AWAITING_FLOW
+            // Handle InteractiveData for AWAITING_FLOW (Meta NFM form submission)
             if (interactiveData && session.step === 'AWAITING_FLOW') {
                 this.logger.log(`Received Interactive Flow Response: ${JSON.stringify(interactiveData)}`);
                 const flowInput = interactiveData.data || {};
                 session.copies = flowInput.copies ? parseInt(flowInput.copies, 10) : 1;
                 session.color = flowInput.color === 'true' || flowInput.color === true;
                 session.sides = flowInput.sides === 'double' ? 'double' : 'single';
-                session.step = 'AWAITING_SIDES';
                 const pricePerPage = session.color ? 10 : 2;
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
                 session.step = 'AWAITING_PAYMENT';
@@ -338,17 +337,13 @@ export class WhatsappService {
                 return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
             }
 
-            // Fallback for AWAITING_FLOW on non-Meta channels
+            // Stuck in AWAITING_FLOW without interactiveData (shouldn't happen but just in case)
+            // — transition to standard copies flow
             if (session.step === 'AWAITING_FLOW' && !interactiveData) {
-                if (normalizedMessage === 'reset' || normalizedMessage === 'start') {
-                    session.step = 'AWAITING_FILE';
-                    session.useFlow = false;
-                    session.files = [];
-                    await this.sendTextMessage(sender, "Session reset. Please send your document.");
-                    return null;
-                }
+                this.logger.warn(`${sender} stuck in AWAITING_FLOW without interactiveData — transitioning to AWAITING_COPIES`);
                 session.step = 'AWAITING_COPIES';
-                await this.sendTextMessage(sender, "Since you are in text mode, let's continue with manual settings.");
+                await this.saveSession(sender, session);
+                await this.sendTypingIndicator(sender);
                 await this.sendContentMessage(sender, 'cf_copies_list');
                 return null;
             }
@@ -392,14 +387,18 @@ export class WhatsappService {
                     // Calculate total pages
                     session.pages = session.files.reduce((sum, f) => sum + f.pages, 0);
 
-                    if (session.useFlow) {
+                    if (session.useFlow && sender.startsWith('whatsapp:')) {
+                        // Meta WhatsApp: send the Native Flow interactive form
                         session.step = 'AWAITING_FLOW';
+                        await this.saveSession(sender, session);
                         await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, "Please open the Interactive Print Form, select your settings, and submit.");
+                        await this.sendContentMessage(sender, 'cf_print_flow');
                         return null;
                     }
 
+                    // Telegram & all other channels: skip AWAITING_FLOW, go straight to copies
                     session.step = 'AWAITING_COPIES';
+                    await this.saveSession(sender, session);
                     await this.sendTypingIndicator(sender);
                     await this.sendContentMessage(sender, 'cf_copies_list');
                     return null;
