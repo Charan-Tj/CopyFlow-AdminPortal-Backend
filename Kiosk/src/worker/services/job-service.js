@@ -55,7 +55,8 @@ class JobService {
     }
 
     const data = await response.json();
-    return Array.isArray(data?.jobs) ? data.jobs : [];
+    // Server returns a plain array; guard against a future {jobs:[]} wrapper too
+    return Array.isArray(data) ? data : Array.isArray(data?.jobs) ? data.jobs : [];
   }
 
   async claimJob(jobId) {

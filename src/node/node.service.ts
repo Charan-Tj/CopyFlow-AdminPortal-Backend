@@ -156,7 +156,11 @@ export class NodeService {
         });
 
         if (job.phone_number) {
-            await this.whatsappService.tellStudentJobIsPrinting(`whatsapp:${job.phone_number}`);
+            // Look up the original sender (with platform prefix, e.g. telegram:123 or whatsapp:+91...)
+            // so Telegram users receive the notification on the right channel.
+            const sessionInfo = await this.whatsappService.getSessionByJobId(jobId);
+            const sender = sessionInfo?.sender ?? `whatsapp:${job.phone_number}`;
+            await this.whatsappService.tellStudentJobIsPrinting(sender);
         }
 
         return { success: true, status: 'PRINTED' };

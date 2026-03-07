@@ -594,6 +594,24 @@ export class WhatsappService {
         }));
     }
 
+    /**
+     * Sends an immediate "payment received, printing soon" notification.
+     * Called right after Razorpay confirms payment so the user isn't left
+     * waiting in silence. Does NOT delete the session — we keep it alive
+     * so the kiosk-acknowledge path can send the final "job printed" message.
+     */
+    async notifyPaymentConfirmed(sender: string): Promise<void> {
+        this.logger.log(`Sending payment-confirmed notification to ${sender}`);
+        try {
+            await this.sendTextMessage(
+                sender,
+                '✅ Payment received! Your print job is queued and will start printing shortly.'
+            );
+        } catch (error: any) {
+            this.logger.error(`Failed to send payment-confirmed message to ${sender}: ${error.message}`);
+        }
+    }
+
     async tellStudentJobIsPrinting(sender: string): Promise<boolean> {
         this.logger.log(`Telling student (${sender}) that job is printing...`);
 

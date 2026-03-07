@@ -90,7 +90,9 @@ export class PaymentService {
 
             if (printSuccess) {
                 this.logger.log(`Print job successfully triggered for order: ${orderId}`);
-                // Note: We don't tellStudentJobIsPrinting here anymore. The printer's explicit Acknowledge endpoint handles it.
+                // Immediate user feedback so they know payment was received.
+                // The kiosk-acknowledge path sends the follow-up "job printed" message.
+                await this.whatsappService.notifyPaymentConfirmed(sender);
             } else {
                 this.logger.error(`Failed to trigger print job for order: ${orderId}`);
             }
