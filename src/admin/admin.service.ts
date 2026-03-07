@@ -133,7 +133,7 @@ export class AdminService {
             revenueToday: revenueTodayRaw._sum.payable_amount || 0,
             alerts: alertsCount,
             failedPaymentsToday: failedPayments,
-            abandonedSessions: this.whatsappService.getSessions().length,
+            abandonedSessions: (await this.whatsappService.getSessions()).length,
             averagePagesPerJob: avgPages._avg.page_count || 0,
             nodes: nodesBreakdown
         };
@@ -173,7 +173,7 @@ export class AdminService {
         return { paymentLink: paymentLinkObj.short_url || 'https://razorpay.com/' };
     }
 
-    getSessions() {
+    async getSessions() {
         return this.whatsappService.getSessions();
     }
 

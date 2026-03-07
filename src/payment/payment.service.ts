@@ -41,19 +41,47 @@ export class PaymentService {
     async processPaymentAndTriggerPrint(orderId: string, paymentDetails: any): Promise<void> {
         this.logger.log(`Processing confirmed webhook payment for Razorpay order: ${orderId}`);
 
-        // Attempt to extract sender contact phone from payment payload if provided
-        const customerPhone = paymentDetails?.contact || paymentDetails?.customer?.contact || 'whatsapp:+919999999999';
-        const sender = customerPhone.includes('whatsapp:') ? customerPhone : `whatsapp:${customerPhone}`;
+        // ── Bug 2 fix: look up session by jobId (our reference_id) first ──
+        // The orderId from `payment_link.paid` is our reference_id (e.g. `wa_1709...`).
+        let session: any = undefined;
+        let sender: string | undefined;
 
-        const session = this.whatsappService.getSession(sender);
+        const byJob = await this.whatsappService.getSessionByJobId(orderId);
+        if (byJob) {
+            session = byJob.session;
+            sender = byJob.sender;
+            this.logger.log(`Found session via jobId lookup for orderId: ${orderId}, sender: ${sender}`);
+        }
 
-        if (session) {
+        // Fallback: try phone-based lookup from payment payload
+        if (!session) {
+            const customerPhone =
+                paymentDetails?.customer?.contact ||
+                paymentDetails?.contact ||
+                paymentDetails?.notes?.customer_phone;
+
+            if (customerPhone) {
+                const normalizedSender = customerPhone.includes('whatsapp:')
+                    ? customerPhone
+                    : `whatsapp:${customerPhone}`;
+
+                session = await this.whatsappService.getSessionAsync(normalizedSender);
+                if (session) {
+                    sender = normalizedSender;
+                    this.logger.log(`Found session via phone lookup for sender: ${sender}`);
+                }
+            }
+        }
+
+        if (session && sender) {
             const jobData = {
                 fileUrl: session.files?.length > 0 ? session.files[0].url : undefined,
                 files: session.files || [],
                 copies: session.copies,
                 color: session.color,
                 sides: session.sides,
+                pages: session.pages,
+                nodeId: session.nodeId,
                 jobId: session.jobId || `wa_${Date.now()}`,
                 sender: sender
             };
@@ -67,7 +95,7 @@ export class PaymentService {
                 this.logger.error(`Failed to trigger print job for order: ${orderId}`);
             }
         } else {
-            this.logger.warn(`Could not find active whatsapp session for sender: ${sender}`);
+            this.logger.warn(`Could not find active whatsapp session for orderId: ${orderId}`);
         }
     }
 }

@@ -151,3 +151,15 @@ model RegistrationCode {
   createdAt  DateTime  @default(now())
   node       Node      @relation(fields: [node_id], references: [id])
 }
+
+model ChatSession {
+  id        String   @id @default(uuid())
+  sender    String   @unique
+  job_id    String?
+  node_id   String?
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([job_id])
+}

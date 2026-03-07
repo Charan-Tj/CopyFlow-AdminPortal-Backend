@@ -35,7 +35,8 @@ interface ChatState {
 export class WhatsappService {
     private readonly logger = new Logger(WhatsappService.name);
 
-    private userSessions = new Map<string, ChatState>();
+    // In-memory cache backed by DB persistence (ChatSession model)
+    private sessionCache = new Map<string, ChatState>();
 
     constructor(
         @Inject(forwardRef(() => RazorpayService)) private readonly razorpayService: RazorpayService,
@@ -43,6 +44,83 @@ export class WhatsappService {
         private readonly prisma: PrismaService,
         @Inject(WHATSAPP_PROVIDER) private readonly whatsappProvider: WhatsappProvider
     ) { }
+
+    // ─── Session persistence helpers ─────────────────────────────────
+
+    private async loadSession(sender: string): Promise<ChatState | undefined> {
+        // Check cache first
+        const cached = this.sessionCache.get(sender);
+        if (cached) return cached;
+
+        // Fall back to DB
+        const row = await this.prisma.chatSession.findUnique({ where: { sender } });
+        if (!row) return undefined;
+
+        const session = row.data as unknown as ChatState;
+        this.sessionCache.set(sender, session);
+        return session;
+    }
+
+    private async saveSession(sender: string, session: ChatState): Promise<void> {
+        this.sessionCache.set(sender, session);
+        await this.prisma.chatSession.upsert({
+            where: { sender },
+            update: {
+                data: session as any,
+                job_id: session.jobId || null,
+                node_id: session.nodeId || null,
+            },
+            create: {
+                sender,
+                data: session as any,
+                job_id: session.jobId || null,
+                node_id: session.nodeId || null,
+            },
+        });
+    }
+
+    private async deleteSession(sender: string): Promise<void> {
+        this.sessionCache.delete(sender);
+        await this.prisma.chatSession.deleteMany({ where: { sender } });
+    }
+
+    /**
+     * Look up session by jobId (reference_id from Razorpay).
+     * Used by PaymentService when phone-based lookup fails.
+     */
+    async getSessionByJobId(jobId: string): Promise<{ sender: string; session: ChatState } | undefined> {
+        // Check cache first
+        for (const [sender, session] of this.sessionCache.entries()) {
+            if (session.jobId === jobId) return { sender, session };
+        }
+        // Fall back to DB
+        const row = await this.prisma.chatSession.findFirst({ where: { job_id: jobId } });
+        if (!row) return undefined;
+        const session = row.data as unknown as ChatState;
+        this.sessionCache.set(row.sender, session);
+        return { sender: row.sender, session };
+    }
+
+    /**
+     * Assign a default active node if no nodeId has been set.
+     * Picks the first active node in the database.
+     */
+    private async ensureNodeId(session: ChatState): Promise<void> {
+        if (session.nodeId) return;
+
+        const defaultNode = await this.prisma.node.findFirst({
+            where: { is_active: true },
+            orderBy: { created_at: 'asc' },
+        });
+
+        if (defaultNode) {
+            session.nodeId = defaultNode.id;
+            session.nodeCode = defaultNode.node_code;
+            this.logger.warn(`No nodeId on session — auto-assigned default node "${defaultNode.name}" (${defaultNode.id})`);
+        } else {
+            this.logger.error('No active nodes in the database — cannot assign a default node');
+        }
+    }
 
     private async sendContentMessage(to: string, contentSid: string, variables: any = {}) {
         await this.whatsappProvider.sendContentMessage(to, contentSid, variables);
@@ -56,6 +134,25 @@ export class WhatsappService {
         await this.whatsappProvider.sendTypingIndicator(to);
     }
 
+    /**
+     * Derive a proper file extension from a MIME type.
+     * Bug 3 fix: images were previously stored as .bin.
+     */
+    private mimeToExtension(mime: string): string {
+        if (mime.includes('pdf')) return 'pdf';
+        if (mime.includes('word') || mime.includes('document')) return 'docx';
+        if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+        if (mime.includes('png')) return 'png';
+        if (mime.includes('gif')) return 'gif';
+        if (mime.includes('webp')) return 'webp';
+        if (mime.includes('tiff')) return 'tiff';
+        if (mime.includes('bmp')) return 'bmp';
+        if (mime.includes('svg')) return 'svg';
+        // Fallback — use the subtype portion of the MIME if available
+        const parts = mime.split('/');
+        return parts.length > 1 ? parts[1].split(';')[0] : 'bin';
+    }
+
     private async getPageCount(mediaUrl: string, mediaContentType?: string): Promise<{ pages: number; supabaseUrl?: string; fileName?: string }> {
         try {
             const buffer = await this.whatsappProvider.downloadMedia(mediaUrl);
@@ -64,7 +161,7 @@ export class WhatsappService {
             let supabaseUrl: string | undefined;
             let fileName: string | undefined;
             try {
-                const extension = mime.includes('pdf') ? 'pdf' : (mime.includes('word') ? 'docx' : 'bin');
+                const extension = this.mimeToExtension(mime);
                 fileName = `upload_${Date.now()}_${Math.floor(Math.random() * 1000)}.${extension}`;
                 supabaseUrl = await this.supabaseStorage.uploadFile(buffer, fileName, mime);
             } catch (storageErr) {
@@ -93,11 +190,11 @@ export class WhatsappService {
     async handleIncomingMessage(sender: string, message: string, mediaUrl?: string, mediaContentType?: string, interactiveData?: any): Promise<string | null> {
         this.logger.log(`Received message from ${sender}: ${message}`);
 
-        let session = this.userSessions.get(sender);
+        let session = await this.loadSession(sender);
 
         if (!session) {
             session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
-            this.userSessions.set(sender, session);
+            await this.saveSession(sender, session);
         }
 
         const normalizedMessage = message.trim().toLowerCase();
@@ -114,6 +211,7 @@ export class WhatsappService {
                 const pricePerPage = session.color ? 10 : 2;
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
                 session.step = 'AWAITING_PAYMENT';
+                await this.saveSession(sender, session);
                 return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
             }
 
@@ -145,6 +243,7 @@ export class WhatsappService {
                     if (node) {
                         session.nodeId = node.id;
                         session.nodeCode = node.node_code;
+                        await this.saveSession(sender, session);
                         await this.sendTypingIndicator(sender);
                         await this.sendTextMessage(sender, `Welcome to CopyFlow @ ${node.name}! Please send your files (PDF/Word/image) to get started.`);
                     } else {
@@ -198,6 +297,7 @@ export class WhatsappService {
                         name: fileName || `file_${fileNum}`,
                     };
                     session.files.push(fileEntry);
+                    await this.saveSession(sender, session);
 
                     const totalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
                     const fileCount = session.files.length;
@@ -247,6 +347,7 @@ export class WhatsappService {
 
                 session.copies = copies;
                 session.step = 'AWAITING_COLOR';
+                await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
                 await this.sendContentMessage(sender, 'cf_color_quickrep');
                 return null;
@@ -264,6 +365,7 @@ export class WhatsappService {
                 }
 
                 session.step = 'AWAITING_SIDES';
+                await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
                 await this.sendContentMessage(sender, 'cf_sides_quickrep');
                 return null;
@@ -284,6 +386,7 @@ export class WhatsappService {
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
 
                 session.step = 'AWAITING_PAYMENT';
+                await this.saveSession(sender, session);
                 return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
             }
 
@@ -314,6 +417,10 @@ export class WhatsappService {
     private async createRazorpayLinkAndNotify(session: ChatState, sender: string, pricePerPage: number): Promise<string | null> {
         try {
             this.logger.log(`Starting to create Razorpay link. Price: ${session.price}, Color: ${session.color}, Sides: ${session.sides}`);
+
+            // Bug 4 fix: ensure a nodeId is set before payment
+            await this.ensureNodeId(session);
+
             const referenceId = `wa_${Date.now()}`;
             session.jobId = referenceId;
             session.sender = sender;
@@ -333,6 +440,9 @@ export class WhatsappService {
             );
 
             session.paymentLink = paymentLinkObj.short_url;
+
+            // Persist session with jobId so webhook can look it up after restart
+            await this.saveSession(sender, session);
 
             const filesText = fileCount > 1 ? `${fileCount} files, ${session.pages || 1} total pages` : `${session.pages || 1} pages`;
             const msg = `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total: ₹${session.price}\n\n🔗 Pay here: ${session.paymentLink}\n\nWe will start printing once payment is confirmed.`;
@@ -358,13 +468,22 @@ export class WhatsappService {
 
     getSession(sender: string): ChatState | undefined {
         const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
-        return this.userSessions.get(to) || this.userSessions.get(sender);
+        return this.sessionCache.get(to) || this.sessionCache.get(sender);
     }
 
-    getSessions(): any[] {
-        return Array.from(this.userSessions.entries()).map(([sender, state]) => ({
-            sender,
-            ...state
+    /**
+     * Async version that checks DB when cache is empty (e.g. after restart).
+     */
+    async getSessionAsync(sender: string): Promise<ChatState | undefined> {
+        const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
+        return (await this.loadSession(to)) || (await this.loadSession(sender));
+    }
+
+    async getSessions(): Promise<any[]> {
+        const rows = await this.prisma.chatSession.findMany();
+        return rows.map((row) => ({
+            sender: row.sender,
+            ...(row.data as any),
         }));
     }
 
@@ -372,7 +491,7 @@ export class WhatsappService {
         this.logger.log(`Telling student (${sender}) that job is printing...`);
 
         const to = sender.includes('whatsapp:') ? sender : `whatsapp:${sender}`;
-        const session = this.userSessions.get(to) || this.userSessions.get(sender);
+        const session = await this.getSessionAsync(to);
 
         // Cleanup ALL uploaded files from Supabase
         if (session && session.files && session.files.length > 0) {
@@ -392,7 +511,8 @@ export class WhatsappService {
             }
         }
 
-        this.userSessions.delete(to);
+        // Remove session from cache and DB
+        await this.deleteSession(to);
 
         try {
             await this.sendTextMessage(to, "✅ Payment Confirmed! Your files have been sent to the printer.");
