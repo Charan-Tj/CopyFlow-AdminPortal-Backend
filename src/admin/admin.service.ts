@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { RazorpayService } from '../payment/razorpay/razorpay.service';
@@ -283,6 +283,49 @@ export class AdminService {
             role: creds.role,
             node_code: creds.node.node_code,
             created_at: creds.created_at
+        };
+    }
+
+    async resetNodeCredentialPassword(nodeId: string, email: string, plainPass: string, actor?: string) {
+        if (!email || !plainPass) {
+            throw new BadRequestException('Email and password are required');
+        }
+
+        const existing = await this.prisma.nodeCredential.findUnique({
+            where: { email },
+            include: { node: true }
+        });
+
+        if (!existing || existing.node_id !== nodeId) {
+            throw new NotFoundException('Node credential not found for this node');
+        }
+
+        const salt = await bcrypt.genSalt();
+        const password_hash = await bcrypt.hash(plainPass, salt);
+
+        const updated = await this.prisma.nodeCredential.update({
+            where: { id: existing.id },
+            data: { password_hash },
+            include: { node: true }
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                event: 'NODE_CREDENTIAL_PASSWORD_RESET',
+                node_id: nodeId,
+                actor,
+                metadata: { email: updated.email, role: updated.role }
+            }
+        });
+
+        // Return reset credential once so admin UI can show/copy it immediately.
+        return {
+            email: updated.email,
+            password: plainPass,
+            role: updated.role,
+            node_code: updated.node.node_code,
+            created_at: updated.created_at,
+            reset_at: new Date()
         };
     }
 

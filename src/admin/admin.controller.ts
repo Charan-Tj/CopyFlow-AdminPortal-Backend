@@ -101,6 +101,13 @@ export class AdminController {
         return this.adminService.createNodeCredentials(id, body.email, body.password);
     }
 
+    @Patch('nodes/:id/credentials/reset')
+    @ApiOperation({ summary: 'Reset operator password for a node credential' })
+    resetNodeCredentialPassword(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+        const adminEmail = req.user?.email || req.user?.sub || 'admin';
+        return this.adminService.resetNodeCredentialPassword(id, body.email, body.password, adminEmail);
+    }
+
     @Get('nodes/:id/qr')
     @ApiOperation({ summary: 'Generate WhatsApp QR code for a node' })
     getNodeQr(@Param('id') id: string) {
