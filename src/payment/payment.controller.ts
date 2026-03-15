@@ -2,11 +2,16 @@ import { Controller, Post, Headers, Req, BadRequestException, Logger } from '@ne
 import { PaymentService } from './payment.service';
 import type { Request } from 'express';
 
+import { PhonepeService } from './phonepe/phonepe.service';
+
 @Controller('payment-webhook')
 export class PaymentController {
     private readonly logger = new Logger(PaymentController.name);
 
-    constructor(private readonly paymentService: PaymentService) { }
+    constructor(
+        private readonly paymentService: PaymentService,
+        private readonly phonepeService: PhonepeService
+    ) { }
 
     /**
      * Controller for Razorpay Webhook Events
@@ -54,5 +59,52 @@ export class PaymentController {
 
         // Acknowledge the webhook event
         return { status: 'ok' };
+    }
+
+    /**
+     * Controller for PhonePe Webhook Events
+     */
+    @Post('phonepe')
+    async handlePhonePeWebhook(
+        @Headers('x-verify') xVerify: string,
+        @Req() req: Request,
+    ) {
+        try {
+            const bodyObj = req.body;
+            this.logger.log(`Received PhonePe webhook event. xVerify header: ${xVerify}`);
+            this.logger.log(`PhonePe Webhook Body: ${JSON.stringify(bodyObj)}`);
+            this.logger.log(`PhonePe Webhook raw headers: ${JSON.stringify(req.headers)}`);
+
+            // Also check uppercase header if it's there
+            const checksum = xVerify || req.headers['x-verify'] || (req.headers['X-VERIFY'] as string);
+
+            if (!checksum || !bodyObj || !bodyObj.response) {
+                this.logger.error('Missing PhonePe signature or response');
+                throw new BadRequestException('Invalid PhonePe callback');
+            }
+
+            const isValid = this.phonepeService.verifyWebhookSignature(bodyObj.response, checksum as string);
+            if (!isValid) {
+                this.logger.error('Invalid PhonePe signature');
+                throw new BadRequestException('Invalid PhonePe signature');
+            }
+
+            // decode base64
+            const decodedString = Buffer.from(bodyObj.response, 'base64').toString('utf8');
+            const decoded = JSON.parse(decodedString);
+
+            if (decoded.success && decoded.code === 'PAYMENT_SUCCESS') {
+                const orderId = decoded.data.transactionId || decoded.data.merchantTransactionId;
+                this.logger.log(`Triggering print for PhonePe Order: ${orderId}`);
+                await this.paymentService.processPaymentAndTriggerPrint(orderId, decoded.data);
+            } else {
+                this.logger.log(`PhonePe payment not successful: ${decoded.code}`);
+            }
+
+            return { status: 'ok' };
+        } catch (error) {
+            this.logger.error(`Error in handlePhonePeWebhook: ${error}`);
+            throw new BadRequestException('PhonePe Webhook failed');
+        }
     }
 }

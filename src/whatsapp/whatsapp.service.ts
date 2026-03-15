@@ -1,5 +1,6 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { RazorpayService } from '../payment/razorpay/razorpay.service';
+import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import axios from 'axios';
 import * as mammoth from 'mammoth';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
@@ -27,6 +28,7 @@ interface ChatState {
     sides?: 'single' | 'double';
     price?: number;
     paymentLink?: string;
+    phonepeLink?: string;
     jobId?: string;
     sender?: string;
     platform?: 'telegram' | 'meta' | 'twilio';
@@ -43,6 +45,7 @@ export class WhatsappService {
 
     constructor(
         @Inject(forwardRef(() => RazorpayService)) private readonly razorpayService: RazorpayService,
+        @Inject(forwardRef(() => PhonepeService)) private readonly phonepeService: PhonepeService,
         private readonly supabaseStorage: SupabaseStorageService,
         private readonly prisma: PrismaService,
         private readonly telegramProvider: TelegramProvider,
@@ -516,7 +519,11 @@ export class WhatsappService {
             }
 
             if (session.step === 'AWAITING_PAYMENT') {
-                const msg = `We are waiting for your payment of ₹${session.price} to be confirmed. Please check the link: ${session.paymentLink}`;
+                let msgLinks = `🔗 Razorpay: ${session.paymentLink}`;
+                if (session.phonepeLink) {
+                    msgLinks += `\n🔗 PhonePe: ${session.phonepeLink}`;
+                }
+                const msg = `We are waiting for your payment of ₹${session.price} to be confirmed.\n\n${msgLinks}`;
                 try {
                     await this.sendTypingIndicator(sender);
                     await this.sendTextMessage(sender, msg);
@@ -564,14 +571,31 @@ export class WhatsappService {
                 description,
                 cleanedPhone
             );
-
             session.paymentLink = paymentLinkObj.short_url;
+
+            try {
+                this.logger.log('Creating payment link via phonepeService...');
+                const phonepeLink = await this.phonepeService.createPaymentLink(
+                    session.price as number,
+                    referenceId,
+                    cleanedPhone
+                );
+                session.phonepeLink = phonepeLink;
+            } catch (err: any) {
+                this.logger.error(`Error generating PhonePe link: ${err.message}`);
+            }
 
             // Persist session with jobId so webhook can look it up after restart
             await this.saveSession(sender, session);
 
             const filesText = fileCount > 1 ? `${fileCount} files, ${session.pages || 1} total pages` : `${session.pages || 1} pages`;
-            const msg = `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total: ₹${session.price}\n\n🔗 Pay here: ${session.paymentLink}\n\nWe will start printing once payment is confirmed.`;
+
+            let messageLinks = `🔗 Pay via Razorpay: ${session.paymentLink}`;
+            if (session.phonepeLink) {
+                messageLinks += `\n🔗 Pay via PhonePe: ${session.phonepeLink}`;
+            }
+
+            const msg = `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total: ₹${session.price}\n\n${messageLinks}\n\nWe will start printing once payment is confirmed.`;
             try {
                 await this.sendTypingIndicator(sender);
                 await this.sendTextMessage(sender, msg);

@@ -240,16 +240,16 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
             type: 'interactive',
             interactive: {
                 type: 'flow',
-                header: { type: 'text', text: '🖨️ Print Settings' },
+                header: { type: 'text', text: 'Print Settings' },
                 body: { text: 'Fill in your print preferences below. We will generate your payment link once you submit.' },
-                footer: { text: 'CopyFlow — Cloud Print Network' },
+                footer: { text: 'CopyFlow - Cloud Print Network' },
                 action: {
                     name: 'flow',
                     parameters: {
                         flow_message_version: '3',
                         flow_token: `cf_flow_${Date.now()}`,
                         flow_id: flowId,
-                        flow_cta: '⚙️ Open Print Form',
+                        flow_cta: 'Open Print Form',
                         flow_action: 'navigate',
                         flow_action_payload: {
                             screen: 'PRINT_SETTINGS'
@@ -267,7 +267,8 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
 
             if (response.status !== 200) {
                 const errDetail = response.data?.error?.message || JSON.stringify(response.data);
-                this.logger.error(`Meta Flow API returned ${response.status}: ${errDetail}`);
+                const errData = response.data?.error?.error_data ? JSON.stringify(response.data.error.error_data) : '';
+                this.logger.error(`Meta Flow API returned ${response.status}: ${errDetail} ${errData}`);
                 // Fall back to standard interactive buttons
                 this.logger.warn('Falling back to standard interactive buttons due to Flow API error');
                 await this.sendContentMessage(to, 'cf_copies_list');
