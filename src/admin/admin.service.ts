@@ -276,7 +276,14 @@ export class AdminService {
             include: { node: true }
         });
 
-        return { email: creds.email, node_code: creds.node.node_code };
+        // Return created credential once so admin UI can show/copy it immediately.
+        return {
+            email: creds.email,
+            password: plainPass,
+            role: creds.role,
+            node_code: creds.node.node_code,
+            created_at: creds.created_at
+        };
     }
 
     async generateNodeQr(id: string) {
