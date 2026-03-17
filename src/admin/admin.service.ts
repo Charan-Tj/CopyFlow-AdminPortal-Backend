@@ -14,6 +14,13 @@ export class AdminService {
         private readonly razorpayService: RazorpayService,
         private readonly whatsappQueue: WhatsappQueueService
     ) { }
+    
+    private isRecentlyOnline(lastHeartbeat?: Date | null, windowMs = 60000) {
+        if (!lastHeartbeat) return false;
+        const heartbeatMs = new Date(lastHeartbeat).getTime();
+        if (Number.isNaN(heartbeatMs)) return false;
+        return (Date.now() - heartbeatMs) < windowMs;
+    }
 
     async getAllKiosks() {
         const today = new Date();
@@ -118,14 +125,20 @@ export class AdminService {
             const nodeRevenueToday = n.jobs
                 .filter(j => j.status === 'PAID')
                 .reduce((sum, j) => sum + Number(j.payable_amount), 0);
-            const isOnline = n.kiosks.some(k =>
-                (new Date().getTime() - k.last_heartbeat.getTime()) < 60000
-            );
+            const isOnline = n.kiosks.some(k => this.isRecentlyOnline(k.last_heartbeat));
             return {
                 id: n.id, node_code: n.node_code, name: n.name,
                 jobs_today: nodeJobsToday, revenue_today: nodeRevenueToday, is_online: isOnline
             };
         });
+
+        let activeSessions = 0;
+        try {
+            const sessions = await this.whatsappService.getSessions();
+            activeSessions = Array.isArray(sessions) ? sessions.length : 0;
+        } catch {
+            activeSessions = 0;
+        }
 
         return {
             totalKiosks: kiosksCount,
@@ -133,7 +146,7 @@ export class AdminService {
             revenueToday: revenueTodayRaw._sum.payable_amount || 0,
             alerts: alertsCount,
             failedPaymentsToday: failedPayments,
-            abandonedSessions: (await this.whatsappService.getSessions()).length,
+            abandonedSessions: activeSessions,
             averagePagesPerJob: avgPages._avg.page_count || 0,
             nodes: nodesBreakdown
         };
