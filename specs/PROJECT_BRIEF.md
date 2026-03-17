@@ -15,15 +15,15 @@ You are tasked with building the backend for **Copy Flow**, a print-kiosk system
 * **Runtime:** Node.js + TypeScript
 * **Framework:** NestJS (Standard Mode)
 * **Database:** PostgreSQL + Prisma ORM
-* **Payment:** Razorpay (Wrapper Service)
+* **Payment:** PhonePe / Cashfree (Wrapper Services)
 * **Security:** HMAC-SHA256 (Token Signing)
 * **Architecture:** REST APIs only (Strictly No GraphQL)
 * **Config:** `dotenv` for secrets
 
 ## 🧱 System Rules (The "Constitution")
 1.  **Source of Truth:** Backend controls payment state.
-2.  **Hardware Isolation:** Raspberry Pi kiosks *never* communicate directly with Razorpay.
-3.  **Payment Validation:** Success is strictly determined by Razorpay Webhooks (server-to-server).
+2.  **Hardware Isolation:** Raspberry Pi kiosks *never* communicate directly with payment providers.
+3.  **Payment Validation:** Success is strictly determined by provider webhooks (server-to-server).
 4.  **Token Security:** Printing requires a signed, expiring HMAC token.
 5.  **Idempotency:** Every job prints exactly once.
 
@@ -38,7 +38,7 @@ You are tasked with building the backend for **Copy Flow**, a print-kiosk system
 * **Schema:** Define Prisma models for:
     * `Kiosk` (pi_id, secret, location)
     * `PrintJob` (job_id, kiosk_id, pages, status, payable_amount)
-    * `Payment` (job_id, amount, currency, status, razorpay_order_id)
+    * `Payment` (job_id, amount, currency, status, provider_order_id)
     * `PrintToken` (job_id, token, expires_at, used)
     * `AuditLog` (event, actor, metadata, timestamp)
 * **Action:** Run migrations and generate the Prisma client.
@@ -54,12 +54,12 @@ You are tasked with building the backend for **Copy Flow**, a print-kiosk system
     * Create `PrintJob` (Status: `UPLOADED_NOT_PAID`).
 * **Output:** Return `job_id` and `payable_amount`.
 
-### 🧩 PHASE 3: Razorpay Integration (The Critical Path)
+### 🧩 PHASE 3: Payment Provider Integration (The Critical Path)
 **Goal:** Secure payment handling.
-* **Service:** Create `RazorpayService` wrapper.
-* **Endpoint:** `POST /jobs/:job_id/pay` -> Creates Razorpay Order -> Returns Order Details.
-* **Webhook:** `POST /webhooks/razorpay`
-    * Verify `x-razorpay-signature`.
+* **Service:** Create provider wrapper services.
+* **Endpoint:** `POST /jobs/:job_id/pay` -> Creates provider order/link -> Returns payment details.
+* **Webhook:** `POST /payment-webhook/:provider`
+    * Verify provider signature.
     * Match `order_id` and `amount`.
     * Update `PrintJob` to `PAID`.
     * Create `Payment` record.

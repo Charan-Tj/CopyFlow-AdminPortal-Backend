@@ -80,7 +80,7 @@ model Payment {
   job_id               String              @unique
   amount               Decimal             @db.Decimal(10, 2)
   currency             String              @default("INR")
-  razorpay_order_id    String              @unique
+  provider_order_id    String              @unique
   status               String
   createdAt            DateTime            @default(now())
   job                  PrintJob            @relation(fields: [job_id], references: [job_id])

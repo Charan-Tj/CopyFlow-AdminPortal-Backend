@@ -17,7 +17,7 @@ The **Copy Flow Admin Control Plane** is a comprehensive management system for a
 - **Database:** PostgreSQL (via Prisma ORM)
 - **API Documentation:** Swagger (OpenAPI)
 - **Authentication:** Passport.js + JWT (JSON Web Tokens)
-- **Payment Integration:** Razorpay (Webhooks & Verification)
+- **Payment Integration:** PhonePe and Cashfree (Webhooks & Verification)
 
 ### Frontend
 - **Framework:** Next.js (React)

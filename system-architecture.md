@@ -8,7 +8,7 @@ The **backend-engine** acts as the central orchestrator for these operations, ut
 
 ## 2. System Architecture Diagram
 
-![System Architecture Diagram](./system-architecture-diagram.svg)
+Diagram source: `system-architecture-diagram.mmd`
 
 ## 3. High-Level Architecture & Technology Stack
 
@@ -17,7 +17,7 @@ The **backend-engine** acts as the central orchestrator for these operations, ut
 - **Database:** PostgreSQL for persistent record storage.
 - **ORM:** Prisma Client for type-safe database access and migrations.
 - **Messaging/Chatbots:** Integrated abstractions for Meta, Twilio, and Telegram.
-- **Payments:** External payment provider integration (Razorpay).
+- **Payments:** External payment provider integrations (PhonePe and Cashfree).
 - **Authentication:** Passport.js with JWT strategies for securing the admin API.
 
 ### Kiosk Node Architecture (Hardware)
@@ -33,7 +33,7 @@ The PostgreSQL database acts as the single source of truth, heavily relying on r
 
 * **Kiosk:** Represents physical printing hardware. Stores authentication `secret`, `location`, `paper_level`, and a `last_heartbeat` timestamp crucial for determining offline states.
 * **PrintJob:** The core entity linking a user's print request to a specific kiosk. Includes `page_count`, `color_mode` (BW/COLOR), financial data (`payable_amount`), and lifecycle `JobStatus` (UPLOADED -> PAID -> PRINTED -> FAILED).
-* **Payment:** Represents the lifecycle of external payment integrations (Razorpay). Tied strictly 1-to-1 to a `PrintJob`.
+* **Payment:** Represents the lifecycle of external payment integrations (PhonePe/Cashfree). Tied strictly 1-to-1 to a `PrintJob`.
 * **PrintToken:** Security token mapping generated post-payment. Utilized by the hardware kiosks to authorize secure document release via `token_hash`.
 * **User & AuditLog:** `User` handles identity of Admins. `AuditLog` stores an immutable historic trail of system events, including dynamic pricing changes and hardware resets.
 * **PricingConfig:** Stores the current operational pricing parameters (`bw_price`, `color_price`). Defines dynamically computed payload values for the chatbot engine.
@@ -48,9 +48,9 @@ This module runs the conversational flow. It processes user payloads via webhook
 - **Queuing:** Utilizes an asynchronous `whatsapp.queue.ts` implementation to decouple HTTP requests from computationally heavy interactions (like parsing documents or sending media callbacks).
 
 ### `PaymentModule` (Transaction Pipeline)
-Manages the integration with the Razorpay API.
+Manages integrations with payment providers.
 - Generates payment links triggered mid-conversation.
-- Recieves asymmetric webhook signatures from Razorpay to fulfill the `PAID` state transition over `PrintJob`s.
+- Receives provider webhook signatures to fulfill the `PAID` state transition over `PrintJob`s.
 - Notifies the PrintModule or Chatbot to push completion messaging.
 
 ### `PrintModule`
@@ -70,8 +70,8 @@ Administrative bounded contexts serving the Next.js frontend. They emit metrics,
 1. **Upload:** User sends a document to the chatbot (e.g., Twilio / Meta / Telegram).
 2. **Analysis:** The `WhatsappModule` queues the payload, the `StorageModule` caches the file, and page counts/color preferences are identified.
 3. **Estimation:** System checks `PricingConfig` to calculate cost. `WhatsappModule` responds via provider quoting the cost.
-4. **Checkout:** User confirms. `PaymentModule` triggers internal state (`UPLOADED`) and provides a Razorpay short-link.
-5. **Fulfillment:** User pays. Razorpay webhook fires updating `Payment`. `PrintToken` generates. Chatbot pings user the Secure Passcode.
+4. **Checkout:** User confirms. `PaymentModule` triggers internal state (`UPLOADED`) and provides a PhonePe/Cashfree payment link.
+5. **Fulfillment:** User pays. Provider webhook updates `Payment`. `PrintToken` generates. Chatbot pings user the Secure Passcode.
 
 ### Flow B: Hardware Retrieval
 1. **Interaction:** User approaches a Kiosk, provides the `PrintToken` passcode.
@@ -86,5 +86,5 @@ Administrative bounded contexts serving the Next.js frontend. They emit metrics,
 
 ## 7. Security & Infrastructure Summary
 - **JWT Authentication:** Stateful user session representation via `Passport.js` limits API capabilities based on predefined Roles.
-- **Webhook Verification:** Cryptographic HMAC signature guarantees block imitation of Razorpay status updates or Twilio messages.
+- **Webhook Verification:** Cryptographic signature verification blocks imitation of payment status updates and chat-provider messages.
 - **Hardware Secrets:** Kiosks authenticate themselves symmetrically using isolated environment variables (`pi_id` and `secret`) rather than exposing raw API capability to public networks.
