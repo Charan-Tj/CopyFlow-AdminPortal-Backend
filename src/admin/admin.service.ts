@@ -385,7 +385,13 @@ export class AdminService {
                 password_hash: hash,
                 role: 'OPERATOR'
             },
-            include: { node: true }
+            include: {
+                node: {
+                    select: {
+                        node_code: true
+                    }
+                }
+            }
         });
 
         // Return created credential once so admin UI can show/copy it immediately.
@@ -408,13 +414,27 @@ export class AdminService {
         if (email) {
             existing = await this.prisma.nodeCredential.findUnique({
                 where: { email },
-                include: { node: true }
+                include: {
+                    node: {
+                        select: {
+                            id: true,
+                            node_code: true
+                        }
+                    }
+                }
             });
         } else {
             existing = await this.prisma.nodeCredential.findFirst({
                 where: { node_id: nodeId },
                 orderBy: { created_at: 'desc' },
-                include: { node: true }
+                include: {
+                    node: {
+                        select: {
+                            id: true,
+                            node_code: true
+                        }
+                    }
+                }
             });
         }
 

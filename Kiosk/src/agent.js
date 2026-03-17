@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const crypto = require('node:crypto');
 const path = require('node:path');
 const express = require('express');
 const { listPrinters } = require('./printers');
@@ -27,16 +28,128 @@ const port = Number(process.env.PORT || 4173);
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 10000);
 const printerSyncMs = Number(process.env.PRINTER_SYNC_MS || 30000);
 const lifecycleSweepMs = Number(process.env.LIFECYCLE_SWEEP_MS || 60000);
+const dashboardSessionTtlMs = Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000);
 const snmpEnabled = String(process.env.SNMP_ENABLED || 'false').toLowerCase() === 'true';
 const snmpCommunity = process.env.SNMP_COMMUNITY || 'public';
 const snmpTimeoutMs = Number(process.env.SNMP_TIMEOUT_MS || 2000);
+const dashboardUser = process.env.KIOSK_DASHBOARD_USER || 'admin';
+const dashboardPassword = process.env.KIOSK_DASHBOARD_PASSWORD || 'admin123';
 
 let pollingBusy = false;
 let printerSyncBusy = false;
 let queueBusy = false;
+const sessions = new Map();
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
+
+function getSessionToken(req) {
+  const authHeader = String(req.headers.authorization || '').trim();
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+
+  const headerToken = String(req.headers['x-session-token'] || '').trim();
+  return headerToken || null;
+}
+
+function createSession(userName) {
+  const token = crypto.randomUUID();
+  sessions.set(token, {
+    userName,
+    expiresAt: Date.now() + dashboardSessionTtlMs
+  });
+  return token;
+}
+
+function getSession(token) {
+  if (!token) {
+    return null;
+  }
+
+  const session = sessions.get(token);
+  if (!session) {
+    return null;
+  }
+
+  if (Date.now() > session.expiresAt) {
+    sessions.delete(token);
+    return null;
+  }
+
+  session.expiresAt = Date.now() + dashboardSessionTtlMs;
+  return session;
+}
+
+function requireApiAuth(req, res, next) {
+  if (req.path.startsWith('/auth/')) {
+    return next();
+  }
+
+  if (req.method === 'GET' && req.path === '/health') {
+    return next();
+  }
+
+  const token = getSessionToken(req);
+  const session = getSession(token);
+
+  if (!session) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  req.authUser = session.userName;
+  return next();
+}
+
+app.use('/api', requireApiAuth);
+
+app.post('/api/auth/login', (req, res) => {
+  const userName = String(req.body?.username || req.body?.email || '').trim();
+  const password = String(req.body?.password || '').trim();
+
+  if (userName !== dashboardUser || password !== dashboardPassword) {
+    addAudit('DASHBOARD_LOGIN_FAILED', userName || 'unknown-user');
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  const token = createSession(userName);
+  addAudit('DASHBOARD_LOGIN_SUCCESS', userName);
+  return res.json({
+    ok: true,
+    token,
+    user: {
+      name: userName
+    },
+    expiresInMs: dashboardSessionTtlMs
+  });
+});
+
+app.get('/api/auth/session', (req, res) => {
+  const token = getSessionToken(req);
+  const session = getSession(token);
+
+  if (!session) {
+    return res.status(401).json({ error: 'Session expired' });
+  }
+
+  return res.json({
+    ok: true,
+    user: {
+      name: session.userName
+    },
+    expiresAt: new Date(session.expiresAt).toISOString()
+  });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const token = getSessionToken(req);
+  if (token) {
+    sessions.delete(token);
+  }
+
+  addAudit('DASHBOARD_LOGOUT', req.authUser || 'dashboard-user');
+  return res.json({ ok: true });
+});
 
 function normalizeJob(rawJob = {}) {
   const id = rawJob.id || rawJob.jobId || `job-${Date.now()}-${Math.round(Math.random() * 1000)}`;
@@ -183,7 +296,7 @@ function dashboardSnapshot() {
   return {
     health: {
       ok: true,
-      serverConnected: serverApi.isEnabled(),
+      serverConnected: serverApi.isConnected(),
       startedAt: state.startedAt,
       lastHeartbeatAt: state.lastHeartbeatAt,
       lastPollAt: state.lastPollAt,
@@ -383,6 +496,32 @@ app.get('/api/health', (_req, res) => {
   res.json(dashboardSnapshot().health);
 });
 
+app.get('/api/connection', (_req, res) => {
+  res.json(serverApi.getConfig());
+});
+
+app.post('/api/connection', (req, res) => {
+  const updated = serverApi.updateConfig(req.body || {});
+  addAudit('SERVER_CONNECTION_UPDATED', req.authUser || 'dashboard-user', {
+    serverUrl: updated.serverUrl,
+    nodeEmail: updated.nodeEmail,
+    pendingJobsPath: updated.pendingJobsPath,
+    eventsPath: updated.eventsPath,
+    loginPath: updated.loginPath
+  });
+  res.json(updated);
+});
+
+app.post('/api/connection/test', async (_req, res) => {
+  const result = await serverApi.testConnection();
+  if (!result.ok) {
+    return res.status(400).json(result);
+  }
+
+  await pollPendingJobs();
+  return res.json(result);
+});
+
 app.get('/api/dashboard', (_req, res) => {
   res.json(dashboardSnapshot());
 });
@@ -405,14 +544,14 @@ app.get('/api/queue', (_req, res) => {
 });
 
 app.post('/api/queue/pause', (req, res) => {
-  const actor = req.body?.actor || 'dashboard-user';
+  const actor = req.body?.actor || req.authUser || 'dashboard-user';
   state.queuePaused = true;
   addAudit('QUEUE_PAUSED', actor);
   res.json({ ok: true, queuePaused: state.queuePaused });
 });
 
 app.post('/api/queue/resume', async (req, res) => {
-  const actor = req.body?.actor || 'dashboard-user';
+  const actor = req.body?.actor || req.authUser || 'dashboard-user';
   state.queuePaused = false;
   addAudit('QUEUE_RESUMED', actor);
   await processQueue();
@@ -420,7 +559,7 @@ app.post('/api/queue/resume', async (req, res) => {
 });
 
 app.delete('/api/queue/:jobId', (req, res) => {
-  const actor = req.body?.actor || 'dashboard-user';
+  const actor = req.body?.actor || req.authUser || 'dashboard-user';
   const removed = removeQueuedJob(req.params.jobId);
   if (!removed) {
     return res.status(404).json({ error: 'Queued job not found' });
@@ -449,7 +588,7 @@ app.post('/api/estimate-cost', (req, res) => {
 
 app.post('/api/payments', (req, res) => {
   registerPayment(req.body || {});
-  addAudit('PAYMENT_REGISTERED', req.body?.actor || 'dashboard-user', {
+  addAudit('PAYMENT_REGISTERED', req.body?.actor || req.authUser || 'dashboard-user', {
     amount: Number(req.body?.amount || 0),
     ref: req.body?.ref || null
   });
@@ -503,7 +642,7 @@ app.post('/api/settings/routing', (req, res) => {
   }
 
   state.settings.routingRules = req.body.routingRules;
-  addAudit('ROUTING_RULES_UPDATED', req.body?.actor || 'dashboard-user', {
+  addAudit('ROUTING_RULES_UPDATED', req.body?.actor || req.authUser || 'dashboard-user', {
     count: state.settings.routingRules.length
   });
   return res.json({ ok: true, routingRules: state.settings.routingRules });
@@ -516,12 +655,12 @@ app.post('/api/settings/lifecycle', (req, res) => {
   }
 
   state.settings.lifecycle.historyRetentionHours = retentionHours;
-  addAudit('LIFECYCLE_UPDATED', req.body?.actor || 'dashboard-user', { retentionHours });
+  addAudit('LIFECYCLE_UPDATED', req.body?.actor || req.authUser || 'dashboard-user', { retentionHours });
   return res.json({ ok: true, lifecycle: state.settings.lifecycle });
 });
 
 app.post('/api/logout', async (req, res) => {
-  const actor = req.body?.actor || 'dashboard-user';
+  const actor = req.body?.actor || req.authUser || 'dashboard-user';
   addAudit('LOGOUT', actor);
   await serverApi.sendEvent('AGENT_LOGOUT', { actor });
   res.json({ ok: true });
@@ -548,7 +687,7 @@ app.post('/api/jobs/print', async (req, res) => {
       color,
       paperSize
       },
-      actor || 'dashboard-user'
+      actor || req.authUser || 'dashboard-user'
     );
 
     if (!queued) {
@@ -642,7 +781,7 @@ async function pollPendingJobs() {
 app.listen(port, () => {
   addLog('info', 'Kiosk web agent started', {
     port,
-    serverConnected: serverApi.isEnabled()
+    serverConnected: serverApi.isConnected()
   });
 
   console.log(`Kiosk web agent running on http://localhost:${port}`);

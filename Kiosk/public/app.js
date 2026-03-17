@@ -1,30 +1,73 @@
+const SESSION_TOKEN_KEY = 'kiosk_session_token';
+let sessionToken = localStorage.getItem(SESSION_TOKEN_KEY) || '';
+let refreshTimer = null;
+
+function setSessionToken(token) {
+  sessionToken = token || '';
+  if (sessionToken) {
+    localStorage.setItem(SESSION_TOKEN_KEY, sessionToken);
+  } else {
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+  }
+}
+
+function setFormMessage(id, message, isError = false) {
+  const el = document.getElementById(id);
+  if (!el) {
+    return;
+  }
+
+  el.textContent = message || '';
+  el.style.color = isError ? '#b3261e' : '#2f6f3e';
+}
+
+async function requestJson(url, options = {}) {
+  const headers = {
+    ...(options.headers || {})
+  };
+
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (sessionToken) {
+    headers.Authorization = `Bearer ${sessionToken}`;
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
+  });
+
+  const body = await response.json().catch(() => ({}));
+
+  if (response.status === 401) {
+    setSessionToken('');
+    showLogin();
+    throw new Error('Authentication required');
+  }
+
+  if (!response.ok) {
+    throw new Error(body.error || `Request failed (${response.status})`);
+  }
+
+  return body;
+}
+
 async function readJson(url, fallback) {
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-    return await response.json();
+    return await requestJson(url);
   } catch {
     return fallback;
   }
 }
 
 async function sendJson(url, method, payload = {}) {
-  const headers = { 'Content-Type': 'application/json' };
-
-  const response = await fetch(url, {
+  return requestJson(url, {
     method,
-    headers,
-    body: JSON.stringify(payload)
+    body: payload
   });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({ error: `Request failed (${response.status})` }));
-    throw new Error(body.error || `Request failed (${response.status})`);
-  }
-
-  return response.json().catch(() => ({}));
 }
 
 function renderList(elementId, lines) {
@@ -67,7 +110,47 @@ function setupTabs() {
   activate('dashboard');
 }
 
+function showLogin() {
+  document.getElementById('loginScreen').classList.remove('hidden');
+  document.getElementById('activeUser').textContent = 'Guest';
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function hideLogin(userName) {
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('activeUser').textContent = userName || 'User';
+  if (!refreshTimer) {
+    refreshTimer = setInterval(refresh, 5000);
+  }
+}
+
+async function loadConnectionForm() {
+  const connection = await readJson('/api/connection', null);
+  if (!connection) {
+    return;
+  }
+
+  document.getElementById('serverUrl').value = connection.serverUrl || '';
+  document.getElementById('agentId').value = connection.agentId || '';
+  document.getElementById('nodeEmail').value = connection.nodeEmail || '';
+  document.getElementById('nodePassword').value = '';
+  document.getElementById('pendingJobsPath').value = connection.pendingJobsPath || '/node/jobs';
+  document.getElementById('eventsPath').value = connection.eventsPath || '/node/events';
+  document.getElementById('loginPath').value = connection.loginPath || '/node/auth/login';
+  const message = connection.connected
+    ? 'Connected to backend'
+    : `Disconnected${connection.lastError ? `: ${connection.lastError}` : ''}`;
+  setFormMessage('connectionMessage', message, !connection.connected);
+}
+
 async function refresh() {
+  if (!sessionToken) {
+    return;
+  }
+
   const [dashboard, logs] = await Promise.all([
     readJson('/api/dashboard', {
       health: { ok: false },
@@ -164,7 +247,105 @@ async function refresh() {
     (logs.logs || []).map((entry) => `${entry.time} | ${entry.level} | ${entry.message}`)
   );
 }
-setupTabs();
 
-refresh();
-setInterval(refresh, 5000);
+async function submitConnection(updateOnly) {
+  const payload = {
+    serverUrl: document.getElementById('serverUrl').value.trim(),
+    agentId: document.getElementById('agentId').value.trim(),
+    nodeEmail: document.getElementById('nodeEmail').value.trim(),
+    pendingJobsPath: document.getElementById('pendingJobsPath').value.trim(),
+    eventsPath: document.getElementById('eventsPath').value.trim(),
+    loginPath: document.getElementById('loginPath').value.trim()
+  };
+
+  const password = document.getElementById('nodePassword').value.trim();
+  if (password) {
+    payload.nodePassword = password;
+  }
+
+  try {
+    await sendJson('/api/connection', 'POST', payload);
+    setFormMessage('connectionMessage', 'Connection settings saved', false);
+
+    if (!updateOnly) {
+      const result = await sendJson('/api/connection/test', 'POST', {});
+      if (result.ok) {
+        setFormMessage('connectionMessage', 'Backend connection successful', false);
+      }
+    }
+
+    document.getElementById('nodePassword').value = '';
+    await refresh();
+  } catch (error) {
+    setFormMessage('connectionMessage', error.message, true);
+  }
+}
+
+function registerAuthHandlers() {
+  const loginForm = document.getElementById('loginForm');
+  const logoutButton = document.getElementById('logoutButton');
+
+  loginForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+
+    try {
+      const response = await sendJson('/api/auth/login', 'POST', { username, password });
+      setSessionToken(response.token || '');
+      hideLogin(response.user?.name || username);
+      setFormMessage('loginMessage', '');
+      await loadConnectionForm();
+      await refresh();
+    } catch (error) {
+      setFormMessage('loginMessage', error.message, true);
+    }
+  });
+
+  logoutButton.addEventListener('click', async () => {
+    try {
+      await sendJson('/api/auth/logout', 'POST', {});
+    } catch {
+      // ignore network/logout cleanup errors
+    }
+
+    setSessionToken('');
+    showLogin();
+    setFormMessage('loginMessage', 'Signed out', false);
+  });
+}
+
+function registerConnectionHandlers() {
+  const connectionForm = document.getElementById('connectionForm');
+  const testButton = document.getElementById('testConnectionButton');
+
+  connectionForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await submitConnection(true);
+  });
+
+  testButton.addEventListener('click', async () => {
+    await submitConnection(false);
+  });
+}
+
+async function bootstrapAuth() {
+  if (!sessionToken) {
+    showLogin();
+    return;
+  }
+
+  try {
+    const session = await requestJson('/api/auth/session');
+    hideLogin(session.user?.name || 'User');
+    await loadConnectionForm();
+    await refresh();
+  } catch {
+    showLogin();
+  }
+}
+
+setupTabs();
+registerAuthHandlers();
+registerConnectionHandlers();
+bootstrapAuth();
