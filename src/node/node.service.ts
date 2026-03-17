@@ -126,6 +126,72 @@ export class NodeService {
         return { jobs: jobsWithUrls };
     }
 
+    async ingestAgentEvent(nodeId: string, type: string, payload: any, time?: string) {
+        if (!type) {
+            throw new BadRequestException('Event type is required');
+        }
+
+        const eventTime = time ? new Date(time) : new Date();
+
+        if (type === 'PRINTER_STATUS') {
+            const printers = Array.isArray(payload?.printers) ? payload.printers : [];
+            const hasLowConsumables = printers.some((printer: any) => {
+                const supplies = Array.isArray(printer?.consumables) ? printer.consumables : [];
+                return supplies.some((supply: any) => Number(supply?.percent ?? 100) <= 15);
+            });
+
+            const kiosk = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
+            if (kiosk) {
+                await this.prisma.kiosk.update({
+                    where: { pi_id: kiosk.pi_id },
+                    data: {
+                        last_heartbeat: eventTime,
+                        printer_list: printers,
+                        paper_level: hasLowConsumables ? 'LOW' : 'HIGH'
+                    }
+                });
+            }
+        }
+
+        if (type === 'JOB_UPDATE') {
+            const jobId = payload?.jobId;
+            const status = String(payload?.status || '').toUpperCase();
+            const details = payload?.details || {};
+
+            if (!jobId) {
+                throw new BadRequestException('JOB_UPDATE payload requires jobId');
+            }
+
+            if (status === 'PRINTED') {
+                await this.acknowledgeJob(nodeId, jobId);
+            } else if (status === 'FAILED') {
+                await this.failJob(nodeId, jobId, details?.error || details?.reason || 'Print failed', details?.diagnostic || details?.error_code);
+            } else if (status === 'RECEIVED' || status === 'PRINTING' || status === 'RETRYING') {
+                await this.prisma.printJob.updateMany({
+                    where: { job_id: jobId, node_id: nodeId },
+                    data: {
+                        claimed_at: eventTime,
+                        claimed_by: nodeId
+                    }
+                });
+            }
+        }
+
+        await this.prisma.auditLog.create({
+            data: {
+                event: `AGENT_${type}`,
+                node_id: nodeId,
+                metadata: {
+                    source: 'kiosk-agent',
+                    at: eventTime.toISOString(),
+                    payload
+                }
+            }
+        });
+
+        return { success: true };
+    }
+
     async acknowledgeJob(nodeId: string, jobId: string) {
         const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
 
@@ -218,6 +284,10 @@ export class NodeService {
     async failJob(nodeId: string, jobId: string, reason: string, errorCode?: string) {
         const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
         if (!job || job.node_id !== nodeId) return { success: false };
+
+        if (job.status === 'FAILED') {
+            return { success: true, status: 'FAILED', alreadyFailed: true };
+        }
 
         await this.prisma.printJob.update({
             where: { job_id: jobId },
