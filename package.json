@@ -46,8 +46,6 @@
     "class-validator": "^0.14.3",
     "dotenv": "^17.2.3",
     "mammoth": "^1.11.0",
-    "mmmagic": "^0.5.3",
-    "node-telegram-bot-api": "^0.67.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdf-parse": "^1.1.1",
