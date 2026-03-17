@@ -90,6 +90,10 @@ export class PaymentService {
 
             if (printSuccess) {
                 this.logger.log(`Print job successfully triggered for order: ${orderId}`);
+                
+                // Update the session step to PAID so it doesn't linger as AWAITING_PAYMENT in dashboards
+                await this.whatsappService.updateSessionStep(sender, 'PAID');
+
                 // Immediate user feedback so they know payment was received.
                 // The kiosk-acknowledge path sends the follow-up "job printed" message.
                 await this.whatsappService.notifyPaymentConfirmed(sender);

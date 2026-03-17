@@ -226,6 +226,7 @@ export class NodeService {
             // so Telegram users receive the notification on the right channel.
             const sessionInfo = await this.whatsappService.getSessionByJobId(jobId);
             const sender = sessionInfo?.sender ?? job.phone_number;
+            await this.whatsappService.updateSessionStep(sender, 'PRINTED');
             await this.whatsappService.tellStudentJobIsPrinting(sender);
         }
 

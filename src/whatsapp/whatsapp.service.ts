@@ -19,7 +19,7 @@ interface UploadedFile {
 }
 
 interface ChatState {
-    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW';
+    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW' | 'PAID' | 'PRINTED';
     nodeId?: string;
     nodeCode?: string;
     files: UploadedFile[];
@@ -111,6 +111,14 @@ export class WhatsappService {
     private async deleteSession(sender: string): Promise<void> {
         this.sessionCache.delete(sender);
         await this.prisma.chatSession.deleteMany({ where: { sender } });
+    }
+
+    async updateSessionStep(sender: string, newStep: 'PAID' | 'PRINTED'): Promise<void> {
+        const session = await this.loadSession(sender);
+        if (session) {
+            session.step = newStep;
+            await this.saveSession(sender, session);
+        }
     }
 
     /**

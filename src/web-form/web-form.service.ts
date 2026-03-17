@@ -56,6 +56,11 @@ export class WebFormService {
         });
 
         if (session) {
+            const sessionData = session.data as any;
+            if (sessionData && (sessionData.step === 'PAID' || sessionData.step === 'PRINTED')) {
+                return { paid: true, status: sessionData.step };
+            }
+
             // Actively verify with Cashfree as fallback if webhook was missed/blocked
             const isCashfreePaid = await this.cashfreeService.checkOrderStatus(jobId);
             if (isCashfreePaid) {
