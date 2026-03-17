@@ -9,51 +9,82 @@ datasource db {
 }
 
 model Kiosk {
-  pi_id          String     @id
-  node_id        String
-  secret         String
-  location       String?
-  paper_level    String     @default("HIGH")
-  last_heartbeat DateTime   @default(now())
-  printer_list   Json?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-  jobs           PrintJob[]
-  node           Node       @relation(fields: [node_id], references: [id])
+  pi_id            String             @id
+  node_id          String
+  secret           String
+  location         String?
+  latitude         Decimal?           @db.Decimal(10, 7)
+  longitude        Decimal?           @db.Decimal(10, 7)
+  agent_version    String?
+  host_name        String?
+  os_name          String?
+  ip_address       String?
+  last_startup_at  DateTime?
+  runtime_status   KioskRuntimeStatus @default(OFFLINE)
+  paper_level      String             @default("HIGH")
+  last_heartbeat   DateTime           @default(now())
+  printer_list     Json?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  jobs             PrintJob[]
+  node             Node               @relation(fields: [node_id], references: [id])
+  printer_snapshots    KioskPrinterSnapshot[]
+  daily_metrics        KioskDailyMetric[]
+  payment_events       KioskPaymentEvent[]
+  system_logs          KioskSystemLog[]
+  notifications        KioskNotification[]
+  failure_diagnostics  KioskFailureDiagnostic[]
+  job_lifecycle_events KioskJobLifecycle[]
 }
 
 model PrintJob {
-  job_id         String      @id @default(uuid())
-  node_id        String
-  kiosk_id       String
-  phone_number   String?
-  copies         Int         @default(1)
-  sides          String      @default("single")
-  file_url       String?
-  file_checksum  String?
-  page_count     Int
-  color_mode     ColorMode
-  status         JobStatus   @default(UPLOADED)
-  payable_amount Decimal     @db.Decimal(10, 2)
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  claimed_at     DateTime?
-  claimed_by     String?
-  node           Node        @relation(fields: [node_id], references: [id])
-  payment        Payment?
-  kiosk          Kiosk       @relation(fields: [kiosk_id], references: [pi_id])
-  printToken     PrintToken?
+  job_id            String      @id @default(uuid())
+  node_id           String
+  kiosk_id          String
+  phone_number      String?
+  copies            Int         @default(1)
+  sides             String      @default("single")
+  file_url          String?
+  file_checksum     String?
+  page_count        Int
+  color_mode        ColorMode
+  status            JobStatus   @default(UPLOADED)
+  payable_amount    Decimal     @db.Decimal(10, 2)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  queue_time        DateTime?
+  claimed_at        DateTime?
+  claimed_by        String?
+  start_time        DateTime?
+  finish_time       DateTime?
+  attempts          Int         @default(0)
+  retry_count       Int         @default(0)
+  latency_ms        Int?
+  error_category    String?
+  error_message     String?
+  assigned_printer  String?
+  user_name         String?
+  document_name     String?
+  final_status      String?
+  node              Node        @relation(fields: [node_id], references: [id])
+  payment           Payment?
+  kiosk             Kiosk       @relation(fields: [kiosk_id], references: [pi_id])
+  printToken        PrintToken?
+  payment_events    KioskPaymentEvent[]
+  failure_diagnostics KioskFailureDiagnostic[]
+  lifecycle_events  KioskJobLifecycle[]
 }
 
 model Payment {
-  id                String   @id @default(uuid())
-  job_id            String   @unique
-  amount            Decimal  @db.Decimal(10, 2)
-  currency          String   @default("INR")
-  razorpay_order_id String   @unique
-  status            String
-  createdAt         DateTime @default(now())
-  job               PrintJob @relation(fields: [job_id], references: [job_id])
+  id                  String   @id @default(uuid())
+  job_id              String   @unique
+  amount              Decimal  @db.Decimal(10, 2)
+  currency            String   @default("INR")
+  razorpay_order_id   String   @unique
+  status              String
+  createdAt           DateTime @default(now())
+  job                 PrintJob @relation(fields: [job_id], references: [job_id])
+  kiosk_payment_events KioskPaymentEvent[]
 }
 
 model PrintToken {
@@ -96,36 +127,200 @@ model PricingConfig {
   node        Node?    @relation(fields: [node_id], references: [id])
 }
 
-enum JobStatus {
-  UPLOADED
-  PAID
-  PRINTED
-  FAILED
+model KioskPrinterSnapshot {
+  id                String   @id @default(uuid())
+  kiosk_id          String
+  node_id           String?
+  printer_name      String
+  driver_name       String?
+  port_name         String?
+  is_online         Boolean  @default(true)
+  status_code       Int?
+  health_score      Int?
+  ink_level_black   Int?
+  ink_level_cyan    Int?
+  ink_level_magenta Int?
+  ink_level_yellow  Int?
+  toner_level       Int?
+  paper_estimate    Int?
+  consumables       Json?
+  snmp_sampled_at   DateTime?
+  captured_at       DateTime @default(now())
+
+  kiosk             Kiosk    @relation(fields: [kiosk_id], references: [pi_id])
+  node              Node?    @relation(fields: [node_id], references: [id])
+  consumable_items  KioskPrinterConsumable[]
+
+  @@index([kiosk_id, captured_at])
+  @@index([printer_name, captured_at])
 }
 
-enum ColorMode {
-  BW
-  COLOR
+model KioskPrinterConsumable {
+  id                  String   @id @default(uuid())
+  printer_snapshot_id String
+  consumable_index    String
+  description         String?
+  level_value         Int?
+  max_value           Int?
+  percent             Int?
+  captured_at         DateTime @default(now())
+
+  printer_snapshot    KioskPrinterSnapshot @relation(fields: [printer_snapshot_id], references: [id], onDelete: Cascade)
+
+  @@index([printer_snapshot_id])
+  @@index([consumable_index])
+}
+
+model KioskJobLifecycle {
+  id               String   @id @default(uuid())
+  kiosk_id         String
+  node_id          String?
+  job_id           String
+  event_type       String
+  event_time       DateTime @default(now())
+  status           String?
+  attempt_no       Int?
+  retry_no         Int?
+  latency_ms       Int?
+  error_category   String?
+  error_message    String?
+  assigned_printer String?
+  actor            String?
+  payload          Json?
+
+  kiosk            Kiosk    @relation(fields: [kiosk_id], references: [pi_id])
+  node             Node?    @relation(fields: [node_id], references: [id])
+  job              PrintJob @relation(fields: [job_id], references: [job_id], onDelete: Cascade)
+
+  @@index([kiosk_id, event_time])
+  @@index([job_id, event_time])
+  @@index([event_type])
+}
+
+model KioskDailyMetric {
+  id                   String   @id @default(uuid())
+  kiosk_id             String
+  node_id              String?
+  metric_date          DateTime
+  pages_printed        Int      @default(0)
+  revenue_amount       Decimal  @default(0) @db.Decimal(12, 2)
+  failed_paid_jobs     Int      @default(0)
+  reconciliation_delta Decimal  @default(0) @db.Decimal(12, 2)
+  successful_jobs      Int      @default(0)
+  failed_jobs          Int      @default(0)
+  updated_at           DateTime @updatedAt
+
+  kiosk                Kiosk    @relation(fields: [kiosk_id], references: [pi_id])
+  node                 Node?    @relation(fields: [node_id], references: [id])
+
+  @@unique([kiosk_id, metric_date])
+  @@index([node_id, metric_date])
+}
+
+model KioskPaymentEvent {
+  id         String   @id @default(uuid())
+  kiosk_id   String
+  node_id    String?
+  job_id     String?
+  payment_id String?
+  event_type String
+  amount     Decimal? @db.Decimal(12, 2)
+  currency   String?  @default("INR")
+  reference  String?
+  payload    Json?
+  created_at DateTime @default(now())
+
+  kiosk      Kiosk    @relation(fields: [kiosk_id], references: [pi_id])
+  node       Node?    @relation(fields: [node_id], references: [id])
+  job        PrintJob? @relation(fields: [job_id], references: [job_id])
+  payment    Payment? @relation(fields: [payment_id], references: [id])
+
+  @@index([kiosk_id, created_at])
+  @@index([job_id])
+  @@index([payment_id])
+}
+
+model KioskSystemLog {
+  id         String   @id @default(uuid())
+  kiosk_id   String
+  node_id    String?
+  level      String
+  message    String
+  payload    Json?
+  created_at DateTime @default(now())
+
+  kiosk      Kiosk    @relation(fields: [kiosk_id], references: [pi_id])
+  node       Node?    @relation(fields: [node_id], references: [id])
+
+  @@index([kiosk_id, created_at])
+  @@index([level, created_at])
+}
+
+model KioskNotification {
+  id              String   @id @default(uuid())
+  kiosk_id        String
+  node_id         String?
+  type            String
+  severity        String   @default("info")
+  message         String
+  acknowledged    Boolean  @default(false)
+  acknowledged_at DateTime?
+  payload         Json?
+  created_at      DateTime @default(now())
+
+  kiosk           Kiosk    @relation(fields: [kiosk_id], references: [pi_id])
+  node            Node?    @relation(fields: [node_id], references: [id])
+
+  @@index([kiosk_id, created_at])
+  @@index([severity, created_at])
+}
+
+model KioskFailureDiagnostic {
+  id                 String   @id @default(uuid())
+  kiosk_id           String
+  node_id            String?
+  job_id             String?
+  error_category     String
+  error_message      String
+  diagnostic_payload Json?
+  resolved           Boolean  @default(false)
+  resolved_at        DateTime?
+  created_at         DateTime @default(now())
+
+  kiosk              Kiosk    @relation(fields: [kiosk_id], references: [pi_id])
+  node               Node?    @relation(fields: [node_id], references: [id])
+  job                PrintJob? @relation(fields: [job_id], references: [job_id])
+
+  @@index([kiosk_id, created_at])
+  @@index([job_id])
+  @@index([error_category, created_at])
 }
 
 model Node {
-  id         String   @id @default(uuid())
-  node_code  String   @unique
-  name       String
-  college    String
-  city       String
-  address    String?
-  is_active  Boolean  @default(true)
-  qr_token   String   @unique @default(uuid())
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  id                   String   @id @default(uuid())
+  node_code            String   @unique
+  name                 String
+  college              String
+  city                 String
+  address              String?
+  is_active            Boolean  @default(true)
+  qr_token             String   @unique @default(uuid())
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
 
-  kiosks             Kiosk[]
-  jobs               PrintJob[]
-  credentials        NodeCredential[]
-  pricing            PricingConfig[]
-  audit_logs         AuditLog[]
-  registration_codes RegistrationCode[]
+  kiosks               Kiosk[]
+  jobs                 PrintJob[]
+  credentials          NodeCredential[]
+  pricing              PricingConfig[]
+  audit_logs           AuditLog[]
+  registration_codes   RegistrationCode[]
+  printer_snapshots    KioskPrinterSnapshot[]
+  daily_metrics        KioskDailyMetric[]
+  payment_events       KioskPaymentEvent[]
+  system_logs          KioskSystemLog[]
+  notifications        KioskNotification[]
+  failure_diagnostics  KioskFailureDiagnostic[]
+  job_lifecycle_events KioskJobLifecycle[]
 }
 
 model NodeCredential {
@@ -162,4 +357,22 @@ model ChatSession {
   updatedAt DateTime @updatedAt
 
   @@index([job_id])
+}
+
+enum JobStatus {
+  UPLOADED
+  PAID
+  PRINTED
+  FAILED
+}
+
+enum ColorMode {
+  BW
+  COLOR
+}
+
+enum KioskRuntimeStatus {
+  ONLINE
+  OFFLINE
+  DEGRADED
 }

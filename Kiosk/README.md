@@ -1,181 +1,99 @@
-# CopyFlow Kiosk App (Windows Print Agent)
+# CopyFlow Kiosk Web Agent
 
-This folder contains a Windows desktop app that:
-- pulls print jobs from server,
-- prints through local Windows printers,
-- sends completion/failure callbacks,
-- provides a live monitoring UI for printers, queues, jobs, and alerts.
+This folder now contains a local web-based print agent.
 
-## Current Implementation Status
+## What this does
 
-Implemented in this starter:
-- Electron desktop shell
-- Worker engine with polling and heartbeat loops
-- Printer discovery (PowerShell `Get-Printer` with fallback)
-- Per-printer queue management
-- Simulated print pipeline (`downloading -> spooling -> printing -> success`)
-- Callback integration stubs (`complete`, `failed`, `heartbeat`)
-- Live UI dashboard
-- Operator controls:
-- pause/resume queue per printer
-- acknowledge alerts
-- enqueue mock jobs for testing
+- Pulls pending jobs from your backend server
+- Finds printers connected to the local Windows computer
+- Polls true SNMP consumable levels when enabled
+- Prints PDF jobs to selected printer
+- Sends job updates back to the backend
+- Sends periodic printer status updates back to the backend
+- Hosts a local dashboard at `http://localhost:4173`
 
-## Folder Structure
+## Your 4 questions answered
 
-```text
-Kiosk/
-  .env.example
-  package.json
-  src/
-    main.js
-    preload.js
-    renderer/
-      index.html
-      app.js
-      styles.css
-    worker/
-      agent.js
-      state-store.js
-      services/
-        config-service.js
-        printer-service.js
-        job-service.js
-        queue-service.js
-        print-service.js
-      utils/
-        logger.js
-  readme.mmd
-```
+1. Can I create a website that takes print jobs from server and prints documents?
+   - Yes, with a local agent process. A plain remote browser app cannot directly control local printers without a local bridge.
+2. Find printer connected to the computer?
+   - Yes, this uses Windows `Get-Printer` via PowerShell.
+3. Send job info back to server?
+   - Yes, this posts `JOB_UPDATE` events to your backend.
+4. Check printer status and update server?
+   - Yes, it syncs printer status on interval and posts `PRINTER_STATUS` events.
 
-## Run Locally
+## Setup
 
-1. Install dependencies:
+1. Create env file
+   - Copy `.env.example` to `.env`
+2. Install dependencies
+   - `npm install`
+3. Start the agent
+   - `npm start`
+4. Open dashboard
+   - `http://localhost:4173`
 
-```bash
-npm install
-```
+## Required server endpoints
 
-2. Create environment file:
-
-```bash
-copy .env.example .env
-```
-
-3. Start app:
-
-```bash
-npm run start
-```
-
-## Environment Variables
-
-All runtime values are configuration-driven through `.env` (no in-code operational defaults).
-
-- `DEVICE_ID`: unique client machine id
-- `API_BASE_URL`: backend root URL
-- `API_TOKEN`: bearer token for backend (optional)
-- `NODE_EMAIL`: node login email
-- `NODE_PASSWORD`: node login password
-- `POLL_INTERVAL_MS`: next-job polling interval
-- `HEARTBEAT_INTERVAL_MS`: heartbeat interval
-- `PRINTER_REFRESH_INTERVAL_MS`: printer discovery refresh interval
-- `DEFAULT_PRINTER`: preferred printer (optional)
-- `FALLBACK_PRINTERS`: comma-separated fallback printer names
-- `SIMULATE_PRINT`: `true` or `false`
-- `MOCK_FILE_URL`: URL used for mock jobs
-- `MOCK_OWNER`: owner label used for mock jobs
-- `MOCK_PRIORITY`: priority label used for mock jobs
-- `MOCK_FILE_PREFIX`: generated mock file prefix
-- `UNKNOWN_PRINTER_NAME`: fallback printer label when none can be resolved
-- `UNKNOWN_FILE_NAME`: fallback file label when name/url is missing
-- `UNKNOWN_OWNER_NAME`: fallback owner label when owner is missing
-- `HEARTBEAT_PAPER_LEVEL`: heartbeat paper level (`HIGH` / `LOW` / `EMPTY`)
-- `HEARTBEAT_INK_BLACK`: heartbeat black ink percentage
-- `STAGE_DOWNLOAD_MS`: simulated download stage duration
-- `STAGE_SPOOL_MS`: simulated spool stage duration
-- `STAGE_PRINT_MS`: simulated print stage duration
-- `APP_VERSION`: app version attached to heartbeat payload
-
-## API Contract Used by Worker
+By default this agent expects:
 
 - `POST /node/auth/login`
-- `POST /node/heartbeat`
 - `GET /node/jobs`
-- `PATCH /node/jobs/:job_id/claim`
-- `POST /node/jobs/:job_id/acknowledge`
-- `POST /node/jobs/:job_id/fail`
+- `POST /node/events`
 
-Polling strategy:
-- heartbeat every `HEARTBEAT_INTERVAL_MS`
-- pending jobs polling every `POLL_INTERVAL_MS`
-- claim immediately before queueing
-- acknowledge or fail after print attempt
+`/node/events` request shape:
 
-Worker behavior if API is unavailable:
-- keeps running,
-- logs warning,
-- raises UI alerts,
-- continues local monitoring and mock test flow.
+- `{ "type": "JOB_UPDATE|PRINTER_STATUS|AGENT_LOGOUT", "agentId": "...", "time": "ISO", "payload": {...} }`
 
-## UI Features Included
+You can change endpoint paths using `.env` values:
 
-- Header health line:
-- worker status
-- API connectivity
-- last heartbeat time
+- `PENDING_JOBS_PATH`
+- `EVENTS_PATH`
+- `NODE_EMAIL`
+- `NODE_PASSWORD`
 
-- Dashboard metrics:
-- total printers
-- online printers
-- busy printers
-- queued jobs
-- failed jobs
-- unacknowledged alerts
+SNMP consumable telemetry settings:
 
-- Printers panel:
-- printer cards
-- model/status
-- queue length
-- active job
-- pause/resume control
+- `SNMP_ENABLED`
+- `SNMP_COMMUNITY`
+- `SNMP_TIMEOUT_MS`
 
-- Queue panel:
-- filter by printer
-- queued jobs table
+## Notes
 
-- Recent jobs panel:
-- final status and completion time
+- This baseline currently prints PDF files.
+- If your backend uses different payload shape, adapt `src/serverApi.js` and `src/agent.js`.
 
-- Alerts panel:
-- latest alerts with acknowledge action
+## Added feature set
 
-- Logs panel:
-- live worker logs
+The kiosk now includes these additional capabilities:
 
-## Notes About Printing Adapter
+- Duplicate job protection (`jobId` and content fingerprint)
+- Retry engine for failed prints (`RETRY_MAX_ATTEMPTS`)
+- Queue controls (pause, resume, cancel queued job)
+- Cost estimation and revenue tracking
+- Printer routing rules (manual rule list via API)
+- Printer health score and estimated ink/page forecast
+- SLA metrics (success rate, average latency, jobs/hour)
+- Error diagnostics summary
+- Audit log with actor metadata
+- CSV report export for jobs
+- Payment registration and reconciliation
+- Notification center for failures/offline/duplicate cases
+- Document history lifecycle cleanup (`JOB_HISTORY_RETENTION_HOURS`)
+- Role-based dashboard login and actor-attributed audit trails
+- Direct persistence of kiosk events into Nest `AuditLog` and `PrintJob` state
+- Optional real SNMP-based consumable polling
 
-`src/worker/services/print-service.js` currently simulates physical print flow to keep development unblocked.
+## Local dashboard API highlights
 
-To use real printing:
-- integrate a Windows print adapter (`pdf-to-printer` or direct spooler command),
-- keep the same stage callback model,
-- map adapter errors to `failJob` callback payload.
-
-## Packaging (Windows Installer)
-
-Build installer:
-
-```bash
-npm run dist
-```
-
-This uses `electron-builder` with NSIS target configured in `package.json`.
-
-## Next Implementation Steps
-
-1. Replace simulated printer execution with real print adapter.
-2. Add retry queue persistence (SQLite).
-3. Add job reassignment and cancel actions in UI.
-4. Add secure token storage (Windows Credential Manager).
-5. Add auto-update workflow.
+- `GET /api/dashboard`
+- `POST /api/jobs/print`
+- `POST /api/queue/pause`
+- `POST /api/queue/resume`
+- `DELETE /api/queue/:jobId`
+- `POST /api/estimate-cost`
+- `POST /api/payments`
+- `GET /api/reconciliation`
+- `GET /api/reports/jobs.csv`
+- `POST /api/logout`

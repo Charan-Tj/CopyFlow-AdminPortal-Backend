@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { RazorpayService } from '../payment/razorpay/razorpay.service';
@@ -263,20 +263,6 @@ export class AdminService {
     }
 
     async createNodeCredentials(nodeId: string, email: string, plainPass: string) {
-        if (!email || !plainPass) {
-            throw new BadRequestException('Email and password are required');
-        }
-
-        const node = await this.prisma.node.findUnique({ where: { id: nodeId } });
-        if (!node) {
-            throw new NotFoundException('Node not found');
-        }
-
-        const existing = await this.prisma.nodeCredential.findUnique({ where: { email } });
-        if (existing) {
-            throw new ConflictException('Email already registered');
-        }
-
         const salt = await bcrypt.genSalt();
         const hash = await bcrypt.hash(plainPass, salt);
 
