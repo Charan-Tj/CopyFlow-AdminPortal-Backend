@@ -18,37 +18,37 @@ export class CashfreeService {
         }
 
         const payload = {
-            link_id: referenceId,
-            link_amount: amount,
-            link_currency: 'INR',
-            link_purpose: description || 'Print Job',
+            order_id: referenceId,
+            order_amount: amount,
+            order_currency: 'INR',
+            order_note: description || 'Print Job',
             customer_details: {
+                customer_id: customerPhone.replace(/\+/, '') || 'cust_default',
                 customer_phone: customerPhone,
-            },
-            link_notify: {
-                send_sms: false,
-                send_email: false
             }
         };
 
-        this.logger.log(`Creating Cashfree link for referenceId: ${referenceId}`);
+        this.logger.log(`Creating Cashfree order for referenceId: ${referenceId}`);
 
         try {
             const response = await axios.post(
-                `${this.baseUrl}/links`,
+                `${this.baseUrl}/orders`,
                 payload,
                 {
                     headers: {
                         'x-client-id': this.appId,
                         'x-client-secret': this.secretKey,
-                        'x-api-version': '2023-08-01',
+                        'x-api-version': '2022-01-01',
                         'Content-Type': 'application/json',
                     }
                 }
             );
 
-            if (response.data && response.data.link_url) {
-                return response.data.link_url;
+            if (response.data && response.data.payment_link) {
+                return response.data.payment_link;
+            } else if (response.data && response.data.payment_session_id) {
+                // Fallback direct checkout link if payment_link isn't present
+                return `https://payments.cashfree.com/order/#${response.data.payment_session_id}`;
             } else {
                 this.logger.error(`Cashfree error: ${JSON.stringify(response.data)}`);
                 throw new Error('Could not parse Cashfree response URL');
@@ -70,6 +70,23 @@ export class CashfreeService {
                 .digest('base64');
 
             return signature === expectedSignature;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    async checkOrderStatus(orderId: string): Promise<boolean> {
+        if (!this.appId || !this.secretKey) return false;
+
+        try {
+            const response = await axios.get(`${this.baseUrl}/orders/${orderId}`, {
+                headers: {
+                    'x-client-id': this.appId,
+                    'x-client-secret': this.secretKey,
+                    'x-api-version': '2022-01-01',
+                },
+            });
+            return response.data?.order_status === 'PAID';
         } catch (error) {
             return false;
         }

@@ -3,12 +3,11 @@ import { WebFormController } from './web-form.controller';
 import { WebFormService } from './web-form.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { StorageModule } from '../storage/storage.module';
-import { RazorpayService } from '../payment/razorpay/razorpay.service';
-import { PhonepeService } from '../payment/phonepe/phonepe.service';
+import { PaymentModule } from '../payment/payment.module';
 
 @Module({
-    imports: [PrismaModule, StorageModule],
+    imports: [PrismaModule, StorageModule, PaymentModule],
     controllers: [WebFormController],
-    providers: [WebFormService, RazorpayService, PhonepeService],
+    providers: [WebFormService],
 })
 export class WebFormModule {}
