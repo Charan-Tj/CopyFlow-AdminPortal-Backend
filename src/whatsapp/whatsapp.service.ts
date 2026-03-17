@@ -10,6 +10,7 @@ import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 import { TelegramProvider } from './providers/telegram.provider';
 import { MetaProvider } from './providers/meta.provider';
 import { TwilioProvider } from './providers/twilio.provider';
+import { evaluateKioskStatus } from '../node/kiosk-status.util';
 const pdfParse = require('pdf-parse');
 
 interface UploadedFile {
@@ -157,6 +158,15 @@ export class WhatsappService {
         } else {
             this.logger.error('No active nodes in the database — cannot assign a default node');
         }
+    }
+
+    private async getNodeKioskStatusSnapshot(nodeId: string) {
+        const kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: nodeId },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        return evaluateKioskStatus(kiosk);
     }
 
     private async sendContentMessage(to: string, contentSid: string, variables: any = {}) {
@@ -566,6 +576,21 @@ export class WhatsappService {
 
             // Bug 4 fix: ensure a nodeId is set before payment
             await this.ensureNodeId(session);
+            if (!session.nodeId) {
+                throw new Error('No print shop is assigned for this job');
+            }
+
+            const kioskStatus = await this.getNodeKioskStatusSnapshot(session.nodeId);
+            if (!kioskStatus.isPrintingReady) {
+                const blockMessage = `⚠️ The selected kiosk is currently not ready for printing (${kioskStatus.reason}). Payment link was not generated. Please try again in a few minutes.`;
+                try {
+                    await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, blockMessage);
+                    return null;
+                } catch {
+                    return blockMessage;
+                }
+            }
 
             const referenceId = `wa_${Date.now()}`;
             session.jobId = referenceId;

@@ -11,6 +11,7 @@ import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import { PaymentService } from '../payment/payment.service';
 import { SubmitPrintOrderDto } from './dto/submit-print-order.dto';
+import { evaluateKioskStatus } from '../node/kiosk-status.util';
 
 interface MulterFile {
     originalname: string;
@@ -101,6 +102,44 @@ export class WebFormService {
         };
     }
 
+    async getNodeKioskStatus(nodeCode: string) {
+        const node = await this.prisma.node.findFirst({
+            where: { node_code: { equals: nodeCode, mode: 'insensitive' } },
+            select: { id: true, node_code: true, name: true }
+        });
+
+        if (!node) {
+            throw new NotFoundException(`Shop "${nodeCode}" not found`);
+        }
+
+        const kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: node.id },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const snapshot = evaluateKioskStatus(kiosk);
+        return {
+            node_id: node.id,
+            node_code: node.node_code,
+            node_name: node.name,
+            ...snapshot
+        };
+    }
+
+    private async assertKioskPrintingReady(nodeId: string, nodeCode: string) {
+        const kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: nodeId },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const snapshot = evaluateKioskStatus(kiosk);
+        if (!snapshot.isPrintingReady) {
+            throw new BadRequestException(
+                `Shop ${nodeCode} is not ready for printing: ${snapshot.reason}. Payment link is blocked until kiosk is ready.`
+            );
+        }
+    }
+
     async submitOrder(
         files: MulterFile[],
         dto: SubmitPrintOrderDto,
@@ -132,6 +171,9 @@ export class WebFormService {
                 throw new NotFoundException('No active print shops available');
             }
         }
+
+        // Hard business rule: no payment link if kiosk is offline or not print-ready.
+        await this.assertKioskPrintingReady(node.id, node.node_code);
 
         // Upload and analyse each file
         const uploadedFiles: UploadedFileResult[] = [];

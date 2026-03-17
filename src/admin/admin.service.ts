@@ -5,6 +5,7 @@ import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import { WhatsappQueueService } from '../whatsapp/whatsapp.queue';
 import * as bcrypt from 'bcrypt';
 import * as qrcode from 'qrcode';
+import { evaluateKioskStatus } from '../node/kiosk-status.util';
 
 @Injectable()
 export class AdminService {
@@ -182,6 +183,15 @@ export class AdminService {
     async resendPayment(jobId: string) {
         const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
         if (!job) throw new NotFoundException('Job not found');
+
+        const kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: job.node_id },
+            orderBy: { updatedAt: 'desc' }
+        });
+        const kioskStatus = evaluateKioskStatus(kiosk);
+        if (!kioskStatus.isPrintingReady) {
+            throw new BadRequestException(`Kiosk is not ready for printing: ${kioskStatus.reason}`);
+        }
 
         const paymentLinkObj = await this.razorpayService.createPaymentLink(
             Number(job.payable_amount),
