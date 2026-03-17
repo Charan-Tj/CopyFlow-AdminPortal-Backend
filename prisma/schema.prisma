@@ -302,7 +302,14 @@ model Node {
   name                 String
   college              String
   city                 String
+  state                String?
+  pincode              String?
   address              String?
+  latitude             Decimal? @db.Decimal(10, 7)
+  longitude            Decimal? @db.Decimal(10, 7)
+  contact_name         String?
+  contact_phone        String?
+  contact_email        String?
   is_active            Boolean  @default(true)
   qr_token             String   @unique @default(uuid())
   created_at           DateTime @default(now())
