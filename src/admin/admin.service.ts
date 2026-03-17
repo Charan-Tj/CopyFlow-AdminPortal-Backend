@@ -22,6 +22,10 @@ export class AdminService {
         return (Date.now() - heartbeatMs) < windowMs;
     }
 
+    private isMissingNodeColumnError(error: any) {
+        return error?.code === 'P2022' && error?.meta?.modelName === 'Node';
+    }
+
     async getAllKiosks() {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -103,7 +107,10 @@ export class AdminService {
                 where: { paper_level: { not: 'HIGH' } },
             }),
             this.prisma.node.findMany({
-                include: {
+                select: {
+                    id: true,
+                    node_code: true,
+                    name: true,
                     kiosks: { select: { last_heartbeat: true } },
                     jobs: {
                         where: { createdAt: { gte: today } },
@@ -206,30 +213,90 @@ export class AdminService {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        const nodes = await this.prisma.node.findMany({
-            include: {
-                kiosks: true,
-                credentials: {
-                    select: {
-                        email: true,
-                        created_at: true,
-                    },
-                    orderBy: { created_at: 'desc' },
-                    take: 1,
-                },
-                _count: {
-                    select: {
-                        credentials: true,
-                    },
-                },
-                jobs: {
-                    where: { createdAt: { gte: today } }
-                }
-            }
-        });
+        let nodes: any[] = [];
 
-        return nodes.map(n => {
-            const isOnline = n.kiosks.some(k => (new Date().getTime() - k.last_heartbeat.getTime()) < 60000);
+        try {
+            nodes = await this.prisma.node.findMany({
+                select: {
+                    id: true,
+                    node_code: true,
+                    name: true,
+                    college: true,
+                    city: true,
+                    state: true,
+                    pincode: true,
+                    address: true,
+                    latitude: true,
+                    longitude: true,
+                    contact_name: true,
+                    contact_phone: true,
+                    contact_email: true,
+                    is_active: true,
+                    qr_token: true,
+                    kiosks: {
+                        select: { last_heartbeat: true }
+                    },
+                    credentials: {
+                        select: {
+                            email: true,
+                            created_at: true,
+                        },
+                        orderBy: { created_at: 'desc' },
+                        take: 1,
+                    },
+                    _count: {
+                        select: {
+                            credentials: true,
+                        },
+                    },
+                    jobs: {
+                        where: { createdAt: { gte: today } },
+                        select: { status: true, payable_amount: true }
+                    }
+                }
+            });
+        } catch (error) {
+            if (!this.isMissingNodeColumnError(error)) {
+                throw error;
+            }
+
+            // Backward-compatible fallback for environments where new Node columns are not migrated yet.
+            nodes = await this.prisma.node.findMany({
+                select: {
+                    id: true,
+                    node_code: true,
+                    name: true,
+                    college: true,
+                    city: true,
+                    address: true,
+                    is_active: true,
+                    qr_token: true,
+                    kiosks: {
+                        select: { last_heartbeat: true }
+                    },
+                    credentials: {
+                        select: {
+                            email: true,
+                            created_at: true,
+                        },
+                        orderBy: { created_at: 'desc' },
+                        take: 1,
+                    },
+                    _count: {
+                        select: {
+                            credentials: true,
+                        },
+                    },
+                    jobs: {
+                        where: { createdAt: { gte: today } },
+                        select: { status: true, payable_amount: true }
+                    }
+                }
+            });
+        }
+
+        return nodes.map((n: any) => {
+            const isOnline = n.kiosks.some((k: any) => this.isRecentlyOnline(k.last_heartbeat));
             const hasCredentials = n._count.credentials > 0;
             const latestCredential = n.credentials[0] || null;
             return {
@@ -249,7 +316,7 @@ export class AdminService {
                 is_active: n.is_active,
                 kiosk_count: n.kiosks.length,
                 jobs_today: n.jobs.length,
-                revenue_today: n.jobs.filter(j => j.status === 'PAID').reduce((sum, j) => sum + Number(j.payable_amount), 0),
+                revenue_today: n.jobs.filter((j: any) => j.status === 'PAID').reduce((sum: number, j: any) => sum + Number(j.payable_amount), 0),
                 is_online: isOnline,
                 qr_token: n.qr_token,
                 has_credentials: hasCredentials,
