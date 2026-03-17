@@ -10,27 +10,21 @@ datasource db {
 
 model Kiosk {
   pi_id          String     @id
-  node_id        String
   secret         String
   location       String?
-  paper_level    String     @default("HIGH")
-  last_heartbeat DateTime   @default(now())
-  printer_list   Json?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
-  jobs           PrintJob[]
+  last_heartbeat DateTime   @default(now())
+  paper_level    String     @default("HIGH")
+  node_id        String
+  printer_list   Json?
   node           Node       @relation(fields: [node_id], references: [id])
+  jobs           PrintJob[]
 }
 
 model PrintJob {
   job_id         String      @id @default(uuid())
-  node_id        String
   kiosk_id       String
-  phone_number   String?
-  copies         Int         @default(1)
-  sides          String      @default("single")
-  file_url       String?
-  file_checksum  String?
   page_count     Int
   color_mode     ColorMode
   status         JobStatus   @default(UPLOADED)
@@ -39,9 +33,15 @@ model PrintJob {
   updatedAt      DateTime    @updatedAt
   claimed_at     DateTime?
   claimed_by     String?
-  node           Node        @relation(fields: [node_id], references: [id])
+  copies         Int         @default(1)
+  file_checksum  String?
+  file_url       String?
+  node_id        String
+  phone_number   String?
+  sides          String      @default("single")
   payment        Payment?
   kiosk          Kiosk       @relation(fields: [kiosk_id], references: [pi_id])
+  node           Node        @relation(fields: [node_id], references: [id])
   printToken     PrintToken?
 }
 
@@ -68,11 +68,11 @@ model PrintToken {
 
 model AuditLog {
   id        String   @id @default(uuid())
-  node_id   String?
   event     String
   actor     String?
   metadata  Json?
   timestamp DateTime @default(now())
+  node_id   String?
   node      Node?    @relation(fields: [node_id], references: [id])
 }
 
@@ -87,44 +87,31 @@ model User {
 
 model PricingConfig {
   id          String   @id @default(uuid())
-  node_id     String?
   bw_price    Decimal  @db.Decimal(10, 2)
   color_price Decimal  @db.Decimal(10, 2)
   author      String
   createdAt   DateTime @default(now())
   active      Boolean  @default(true)
+  node_id     String?
   node        Node?    @relation(fields: [node_id], references: [id])
 }
 
-enum JobStatus {
-  UPLOADED
-  PAID
-  PRINTED
-  FAILED
-}
-
-enum ColorMode {
-  BW
-  COLOR
-}
-
 model Node {
-  id         String   @id @default(uuid())
-  node_code  String   @unique
-  name       String
-  college    String
-  city       String
-  address    String?
-  is_active  Boolean  @default(true)
-  qr_token   String   @unique @default(uuid())
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
-
+  id                 String             @id @default(uuid())
+  node_code          String             @unique
+  name               String
+  college            String
+  city               String
+  address            String?
+  is_active          Boolean            @default(true)
+  qr_token           String             @unique @default(uuid())
+  created_at         DateTime           @default(now())
+  updated_at         DateTime           @updatedAt
+  audit_logs         AuditLog[]
   kiosks             Kiosk[]
-  jobs               PrintJob[]
   credentials        NodeCredential[]
   pricing            PricingConfig[]
-  audit_logs         AuditLog[]
+  jobs               PrintJob[]
   registration_codes RegistrationCode[]
 }
 
@@ -136,8 +123,7 @@ model NodeCredential {
   role          String    @default("OPERATOR")
   last_login    DateTime?
   created_at    DateTime  @default(now())
-
-  node Node @relation(fields: [node_id], references: [id])
+  node          Node      @relation(fields: [node_id], references: [id])
 }
 
 model RegistrationCode {
@@ -162,4 +148,16 @@ model ChatSession {
   updatedAt DateTime @updatedAt
 
   @@index([job_id])
+}
+
+enum JobStatus {
+  UPLOADED
+  PAID
+  PRINTED
+  FAILED
+}
+
+enum ColorMode {
+  BW
+  COLOR
 }

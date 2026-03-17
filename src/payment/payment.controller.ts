@@ -3,6 +3,7 @@ import { PaymentService } from './payment.service';
 import type { Request } from 'express';
 
 import { PhonepeService } from './phonepe/phonepe.service';
+import { CashfreeService } from './cashfree/cashfree.service';
 
 @Controller('payment-webhook')
 export class PaymentController {
@@ -10,7 +11,8 @@ export class PaymentController {
 
     constructor(
         private readonly paymentService: PaymentService,
-        private readonly phonepeService: PhonepeService
+        private readonly phonepeService: PhonepeService,
+        private readonly cashfreeService: CashfreeService
     ) { }
 
     /**
@@ -105,6 +107,48 @@ export class PaymentController {
         } catch (error) {
             this.logger.error(`Error in handlePhonePeWebhook: ${error}`);
             throw new BadRequestException('PhonePe Webhook failed');
+        }
+    }
+
+    /**
+     * Controller for Cashfree Webhook Events
+     */
+    @Post('cashfree')
+    async handleCashfreeWebhook(
+        @Headers('x-webhook-signature') signature: string,
+        @Headers('x-webhook-timestamp') timestamp: string,
+        @Req() req: Request,
+    ) {
+        try {
+            const rawBody = (req as any).rawBody;
+            const bodyObj = req.body;
+            this.logger.log(`Received Cashfree webhook event. signature header: ${signature}, timestamp: ${timestamp}`);
+
+            if (!signature || !timestamp || !rawBody) {
+                this.logger.error('Missing Cashfree signature, timestamp or body');
+                throw new BadRequestException('Invalid Cashfree callback');
+            }
+
+            const isValid = this.cashfreeService.verifyWebhookSignature(rawBody.toString(), signature, timestamp);
+            if (!isValid) {
+                this.logger.error('Invalid Cashfree signature');
+                throw new BadRequestException('Invalid Cashfree signature');
+            }
+
+            if (bodyObj.data && bodyObj.data.payment && bodyObj.data.payment.payment_status === 'SUCCESS') {
+                const orderId = bodyObj.data.order && bodyObj.data.order.order_id;
+                // For link payments, link_id is usually passed as order_id or accessible differently.
+                // Cashfree links typically create an order where order_id = link_id
+                this.logger.log(`Triggering print for Cashfree Order: ${orderId}`);
+                await this.paymentService.processPaymentAndTriggerPrint(orderId, bodyObj.data);
+            } else {
+                this.logger.log(`Cashfree payment not successful or different event: ${bodyObj.type}`);
+            }
+
+            return { status: 'ok' };
+        } catch (error) {
+            this.logger.error(`Error in handleCashfreeWebhook: ${error}`);
+            throw new BadRequestException('Cashfree Webhook failed');
         }
     }
 }

@@ -1,6 +1,7 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import { PhonepeService } from '../payment/phonepe/phonepe.service';
+import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import axios from 'axios';
 import * as mammoth from 'mammoth';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
@@ -29,6 +30,7 @@ interface ChatState {
     price?: number;
     paymentLink?: string;
     phonepeLink?: string;
+    cashfreeLink?: string;
     jobId?: string;
     sender?: string;
     platform?: 'telegram' | 'meta' | 'twilio';
@@ -46,6 +48,7 @@ export class WhatsappService {
     constructor(
         @Inject(forwardRef(() => RazorpayService)) private readonly razorpayService: RazorpayService,
         @Inject(forwardRef(() => PhonepeService)) private readonly phonepeService: PhonepeService,
+        @Inject(forwardRef(() => CashfreeService)) private readonly cashfreeService: CashfreeService,
         private readonly supabaseStorage: SupabaseStorageService,
         private readonly prisma: PrismaService,
         private readonly telegramProvider: TelegramProvider,
@@ -523,6 +526,9 @@ export class WhatsappService {
                 if (session.phonepeLink) {
                     msgLinks += `\n🔗 PhonePe: ${session.phonepeLink}`;
                 }
+                if (session.cashfreeLink) {
+                    msgLinks += `\n🔗 Cashfree: ${session.cashfreeLink}`;
+                }
                 const msg = `We are waiting for your payment of ₹${session.price} to be confirmed.\n\n${msgLinks}`;
                 try {
                     await this.sendTypingIndicator(sender);
@@ -585,6 +591,19 @@ export class WhatsappService {
                 this.logger.error(`Error generating PhonePe link: ${err.message}`);
             }
 
+            try {
+                this.logger.log('Creating payment link via cashfreeService...');
+                const cashfreeLink = await this.cashfreeService.createPaymentLink(
+                    session.price as number,
+                    referenceId,
+                    cleanedPhone,
+                    description // Using description for 'link_purpose'
+                );
+                if (cashfreeLink) session.cashfreeLink = cashfreeLink;
+            } catch (err: any) {
+                this.logger.error(`Error generating Cashfree link: ${err.message}`);
+            }
+
             // Persist session with jobId so webhook can look it up after restart
             await this.saveSession(sender, session);
 
@@ -593,6 +612,9 @@ export class WhatsappService {
             let messageLinks = `🔗 Pay via Razorpay: ${session.paymentLink}`;
             if (session.phonepeLink) {
                 messageLinks += `\n🔗 Pay via PhonePe: ${session.phonepeLink}`;
+            }
+            if (session.cashfreeLink) {
+                messageLinks += `\n🔗 Pay via Cashfree: ${session.cashfreeLink}`;
             }
 
             const msg = `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total: ₹${session.price}\n\n${messageLinks}\n\nWe will start printing once payment is confirmed.`;
