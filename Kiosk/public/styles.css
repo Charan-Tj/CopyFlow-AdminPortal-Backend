@@ -66,6 +66,12 @@ body {
   color: var(--muted);
 }
 
+.login-card form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
 .dashboard-shell {
   width: min(1240px, calc(100% - 2rem));
   margin: 1.6rem auto 2.5rem;
