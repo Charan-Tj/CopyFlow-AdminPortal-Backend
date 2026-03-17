@@ -34,6 +34,7 @@ const snmpCommunity = process.env.SNMP_COMMUNITY || 'public';
 const snmpTimeoutMs = Number(process.env.SNMP_TIMEOUT_MS || 2000);
 const dashboardUser = process.env.KIOSK_DASHBOARD_USER || 'admin';
 const dashboardPassword = process.env.KIOSK_DASHBOARD_PASSWORD || 'admin123';
+const defaultServerUrl = process.env.KIOSK_DEFAULT_SERVER_URL || process.env.SERVER_URL || 'http://localhost:3000';
 
 let pollingBusy = false;
 let printerSyncBusy = false;
@@ -103,23 +104,70 @@ function requireApiAuth(req, res, next) {
 
 app.use('/api', requireApiAuth);
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const userName = String(req.body?.username || req.body?.email || '').trim();
   const password = String(req.body?.password || '').trim();
 
-  if (userName !== dashboardUser || password !== dashboardPassword) {
-    addAudit('DASHBOARD_LOGIN_FAILED', userName || 'unknown-user');
+  if (!userName || !password) {
+    addAudit('DASHBOARD_LOGIN_FAILED', userName || 'unknown-user', { reason: 'missing_credentials' });
     return res.status(401).json({ error: 'Invalid username or password' });
   }
 
+  if (userName === dashboardUser && password === dashboardPassword) {
+    const token = createSession(userName);
+    addAudit('DASHBOARD_LOGIN_SUCCESS', userName, { mode: 'local' });
+    return res.json({
+      ok: true,
+      token,
+      user: {
+        name: userName
+      },
+      mode: 'local',
+      expiresInMs: dashboardSessionTtlMs
+    });
+  }
+
+  const currentConnection = serverApi.getConfig();
+  if (!currentConnection.serverUrl && defaultServerUrl) {
+    serverApi.updateConfig({
+      serverUrl: defaultServerUrl
+    });
+  }
+
+  const effectiveConnection = serverApi.getConfig();
+  if (!effectiveConnection.serverUrl) {
+    addAudit('DASHBOARD_LOGIN_FAILED', userName || 'unknown-user', {
+      mode: 'node',
+      reason: 'missing_server_url'
+    });
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  const credentialCheck = await serverApi.testCredentials(userName, password);
+  if (!credentialCheck.ok) {
+    addAudit('DASHBOARD_LOGIN_FAILED', userName || 'unknown-user', {
+      mode: 'node',
+      reason: credentialCheck.error
+    });
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  serverApi.updateConfig({
+    nodeEmail: userName,
+    nodePassword: password
+  });
+
+  await serverApi.testConnection();
+
   const token = createSession(userName);
-  addAudit('DASHBOARD_LOGIN_SUCCESS', userName);
+  addAudit('DASHBOARD_LOGIN_SUCCESS', userName, { mode: 'node' });
   return res.json({
     ok: true,
     token,
     user: {
       name: userName
     },
+    mode: 'node',
     expiresInMs: dashboardSessionTtlMs
   });
 });
