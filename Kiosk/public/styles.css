@@ -29,6 +29,43 @@ body {
     var(--bg);
 }
 
+.login-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(21, 27, 34, 0.44);
+  backdrop-filter: blur(8px);
+}
+
+.login-screen.hidden {
+  display: none;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  background: #ffffff;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 40px rgba(28, 34, 42, 0.18);
+  padding: 1.2rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-family: 'Sora', sans-serif;
+  font-size: 1.4rem;
+}
+
+.login-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .dashboard-shell {
   width: min(1240px, calc(100% - 2rem));
   margin: 1.6rem auto 2.5rem;
@@ -99,6 +136,16 @@ body {
   display: flex;
   gap: 0.55rem;
   align-items: center;
+}
+
+.user-chip {
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fffaf0;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .avatar {
@@ -410,6 +457,30 @@ form button {
   background: linear-gradient(140deg, #222a35 0%, #101419 100%);
   color: #f1f4fa;
   cursor: pointer;
+}
+
+.form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.6rem;
+}
+
+.form-actions button {
+  flex: 1;
+}
+
+.form-actions button[type='button'] {
+  border: 1px solid #1f2530;
+  background: #ffffff;
+  color: #1f2530;
+}
+
+.form-message {
+  grid-column: 1 / -1;
+  margin: 0;
+  min-height: 1.2em;
+  font-size: 0.85rem;
+  color: #8f4e0d;
 }
 
 ul {

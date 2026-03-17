@@ -17,7 +17,15 @@ export class NodeService {
     async login(email: string, pass: string) {
         const cred = await this.prisma.nodeCredential.findUnique({
             where: { email },
-            include: { node: true }
+            include: {
+                node: {
+                    select: {
+                        id: true,
+                        name: true,
+                        node_code: true
+                    }
+                }
+            }
         });
 
         if (!cred) {
