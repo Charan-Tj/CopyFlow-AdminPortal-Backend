@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
 import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import { PhonepeService } from '../payment/phonepe/phonepe.service';
+import { CashfreeService } from '../payment/cashfree/cashfree.service';
+import { PaymentService } from '../payment/payment.service';
 import { SubmitPrintOrderDto } from './dto/submit-print-order.dto';
 
 interface MulterFile {
@@ -34,6 +36,8 @@ export class WebFormService {
         private readonly supabaseStorage: SupabaseStorageService,
         private readonly razorpayService: RazorpayService,
         private readonly phonepeService: PhonepeService,
+        private readonly cashfreeService: CashfreeService,
+        private readonly paymentService: PaymentService,
     ) {}
 
     async getJobStatus(jobId: string) {
@@ -52,6 +56,15 @@ export class WebFormService {
         });
 
         if (session) {
+            // Actively verify with Cashfree as fallback if webhook was missed/blocked
+            const isCashfreePaid = await this.cashfreeService.checkOrderStatus(jobId);
+            if (isCashfreePaid) {
+                // Manually trigger the process that upgrades session to printJob
+                this.logger.log(`Active check found Cashfree order ${jobId} PAID, processing...`);
+                await this.paymentService.processPaymentAndTriggerPrint(jobId, {});
+                return { paid: true, status: 'PAID' }; // It might be UPLOADED in the db, but it's paid
+            }
+
             return { paid: false, status: 'AWAITING_PAYMENT' };
         }
 
@@ -99,6 +112,7 @@ export class WebFormService {
                     node_code: { equals: dto.node_code, mode: 'insensitive' },
                     is_active: true,
                 },
+                select: { id: true, node_code: true, name: true }
             });
             if (!node) {
                 throw new NotFoundException(`Shop "${dto.node_code}" not found or inactive`);
@@ -107,6 +121,7 @@ export class WebFormService {
             node = await this.prisma.node.findFirst({
                 where: { is_active: true },
                 orderBy: { created_at: 'asc' },
+                select: { id: true, node_code: true, name: true }
             });
             if (!node) {
                 throw new NotFoundException('No active print shops available');
@@ -186,6 +201,18 @@ export class WebFormService {
             this.logger.warn(`PhonePe link could not be generated: ${err.message}`);
         }
 
+        let cashfreeLink: string | null = null;
+        try {
+            cashfreeLink = await this.cashfreeService.createPaymentLink(
+                totalPrice,
+                referenceId,
+                dto.phone_number,
+                description
+            );
+        } catch (err) {
+            this.logger.warn(`Cashfree link could not be generated: ${err.message}`);
+        }
+
         return {
             job_id: referenceId,
             total_pages: totalPages,
@@ -197,6 +224,7 @@ export class WebFormService {
             price_per_page: pricePerPage,
             razorpay_link: razorpayLink,
             phonepe_link: phonepeLink,
+            cashfree_link: cashfreeLink,
             node_name: node.name,
             node_code: node.node_code,
             college: node.college,
