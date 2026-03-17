@@ -99,6 +99,7 @@ export class WebFormService {
                     node_code: { equals: dto.node_code, mode: 'insensitive' },
                     is_active: true,
                 },
+                select: { id: true, node_code: true, name: true }
             });
             if (!node) {
                 throw new NotFoundException(`Shop "${dto.node_code}" not found or inactive`);
@@ -107,6 +108,7 @@ export class WebFormService {
             node = await this.prisma.node.findFirst({
                 where: { is_active: true },
                 orderBy: { created_at: 'asc' },
+                select: { id: true, node_code: true, name: true }
             });
             if (!node) {
                 throw new NotFoundException('No active print shops available');
