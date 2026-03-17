@@ -448,7 +448,13 @@ export class AdminService {
         const updated = await this.prisma.nodeCredential.update({
             where: { id: existing.id },
             data: { password_hash },
-            include: { node: true }
+            include: {
+                node: {
+                    select: {
+                        node_code: true
+                    }
+                }
+            }
         });
 
         await this.prisma.auditLog.create({
