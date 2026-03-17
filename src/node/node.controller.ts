@@ -54,6 +54,14 @@ export class NodeController {
     }
 
     @UseGuards(NodeAuthGuard)
+    @Post('events')
+    @ApiOperation({ summary: 'Ingest kiosk runtime events for persistence and reconciliation' })
+    async ingestEvent(@Request() req: any, @Body() body: any) {
+        const nodeId = req.node.nodeId;
+        return this.nodeService.ingestAgentEvent(nodeId, body?.type, body?.payload || {}, body?.time);
+    }
+
+    @UseGuards(NodeAuthGuard)
     @Post('jobs/:job_id/acknowledge')
     @ApiOperation({ summary: 'Acknowledge job printed successfully' })
     async acknowledgeJob(@Request() req: any, @Param('job_id') jobId: string) {

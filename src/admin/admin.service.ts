@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { RazorpayService } from '../payment/razorpay/razorpay.service';
@@ -14,6 +14,17 @@ export class AdminService {
         private readonly razorpayService: RazorpayService,
         private readonly whatsappQueue: WhatsappQueueService
     ) { }
+    
+    private isRecentlyOnline(lastHeartbeat?: Date | null, windowMs = 60000) {
+        if (!lastHeartbeat) return false;
+        const heartbeatMs = new Date(lastHeartbeat).getTime();
+        if (Number.isNaN(heartbeatMs)) return false;
+        return (Date.now() - heartbeatMs) < windowMs;
+    }
+
+    private isMissingNodeColumnError(error: any) {
+        return error?.code === 'P2022' && error?.meta?.modelName === 'Node';
+    }
 
     async getAllKiosks() {
         const today = new Date();
@@ -96,7 +107,10 @@ export class AdminService {
                 where: { paper_level: { not: 'HIGH' } },
             }),
             this.prisma.node.findMany({
-                include: {
+                select: {
+                    id: true,
+                    node_code: true,
+                    name: true,
                     kiosks: { select: { last_heartbeat: true } },
                     jobs: {
                         where: { createdAt: { gte: today } },
@@ -118,14 +132,20 @@ export class AdminService {
             const nodeRevenueToday = n.jobs
                 .filter(j => j.status === 'PAID')
                 .reduce((sum, j) => sum + Number(j.payable_amount), 0);
-            const isOnline = n.kiosks.some(k =>
-                (new Date().getTime() - k.last_heartbeat.getTime()) < 60000
-            );
+            const isOnline = n.kiosks.some(k => this.isRecentlyOnline(k.last_heartbeat));
             return {
                 id: n.id, node_code: n.node_code, name: n.name,
                 jobs_today: nodeJobsToday, revenue_today: nodeRevenueToday, is_online: isOnline
             };
         });
+
+        let activeSessions = 0;
+        try {
+            const sessions = await this.whatsappService.getSessions();
+            activeSessions = Array.isArray(sessions) ? sessions.length : 0;
+        } catch {
+            activeSessions = 0;
+        }
 
         return {
             totalKiosks: kiosksCount,
@@ -133,7 +153,7 @@ export class AdminService {
             revenueToday: revenueTodayRaw._sum.payable_amount || 0,
             alerts: alertsCount,
             failedPaymentsToday: failedPayments,
-            abandonedSessions: (await this.whatsappService.getSessions()).length,
+            abandonedSessions: activeSessions,
             averagePagesPerJob: avgPages._avg.page_count || 0,
             nodes: nodesBreakdown
         };
@@ -193,30 +213,115 @@ export class AdminService {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        const nodes = await this.prisma.node.findMany({
-            include: {
-                kiosks: true,
-                jobs: {
-                    where: { createdAt: { gte: today } }
-                }
-            }
-        });
+        let nodes: any[] = [];
 
-        return nodes.map(n => {
-            const isOnline = n.kiosks.some(k => (new Date().getTime() - k.last_heartbeat.getTime()) < 60000);
+        try {
+            nodes = await this.prisma.node.findMany({
+                select: {
+                    id: true,
+                    node_code: true,
+                    name: true,
+                    college: true,
+                    city: true,
+                    state: true,
+                    pincode: true,
+                    address: true,
+                    latitude: true,
+                    longitude: true,
+                    contact_name: true,
+                    contact_phone: true,
+                    contact_email: true,
+                    is_active: true,
+                    qr_token: true,
+                    kiosks: {
+                        select: { last_heartbeat: true }
+                    },
+                    credentials: {
+                        select: {
+                            email: true,
+                            created_at: true,
+                        },
+                        orderBy: { created_at: 'desc' },
+                        take: 1,
+                    },
+                    _count: {
+                        select: {
+                            credentials: true,
+                        },
+                    },
+                    jobs: {
+                        where: { createdAt: { gte: today } },
+                        select: { status: true, payable_amount: true }
+                    }
+                }
+            });
+        } catch (error) {
+            if (!this.isMissingNodeColumnError(error)) {
+                throw error;
+            }
+
+            // Backward-compatible fallback for environments where new Node columns are not migrated yet.
+            nodes = await this.prisma.node.findMany({
+                select: {
+                    id: true,
+                    node_code: true,
+                    name: true,
+                    college: true,
+                    city: true,
+                    address: true,
+                    is_active: true,
+                    qr_token: true,
+                    kiosks: {
+                        select: { last_heartbeat: true }
+                    },
+                    credentials: {
+                        select: {
+                            email: true,
+                            created_at: true,
+                        },
+                        orderBy: { created_at: 'desc' },
+                        take: 1,
+                    },
+                    _count: {
+                        select: {
+                            credentials: true,
+                        },
+                    },
+                    jobs: {
+                        where: { createdAt: { gte: today } },
+                        select: { status: true, payable_amount: true }
+                    }
+                }
+            });
+        }
+
+        return nodes.map((n: any) => {
+            const isOnline = n.kiosks.some((k: any) => this.isRecentlyOnline(k.last_heartbeat));
+            const hasCredentials = n._count.credentials > 0;
+            const latestCredential = n.credentials[0] || null;
             return {
                 id: n.id,
                 node_code: n.node_code,
                 name: n.name,
                 college: n.college,
                 city: n.city,
+                state: n.state,
+                pincode: n.pincode,
                 address: n.address,
+                latitude: n.latitude,
+                longitude: n.longitude,
+                contact_name: n.contact_name,
+                contact_phone: n.contact_phone,
+                contact_email: n.contact_email,
                 is_active: n.is_active,
                 kiosk_count: n.kiosks.length,
                 jobs_today: n.jobs.length,
-                revenue_today: n.jobs.filter(j => j.status === 'PAID').reduce((sum, j) => sum + Number(j.payable_amount), 0),
+                revenue_today: n.jobs.filter((j: any) => j.status === 'PAID').reduce((sum: number, j: any) => sum + Number(j.payable_amount), 0),
                 is_online: isOnline,
-                qr_token: n.qr_token
+                qr_token: n.qr_token,
+                has_credentials: hasCredentials,
+                credential_email: latestCredential?.email || null,
+                credential_created_at: latestCredential?.created_at || null,
             };
         });
     }
@@ -236,7 +341,14 @@ export class AdminService {
                 name: data.name,
                 college: data.college,
                 city: data.city,
+                state: data.state,
+                pincode: data.pincode,
                 address: data.address,
+                latitude: data.latitude,
+                longitude: data.longitude,
+                contact_name: data.contact_name,
+                contact_phone: data.contact_phone,
+                contact_email: data.contact_email,
                 node_code: data.node_code
             }
         });
@@ -283,6 +395,59 @@ export class AdminService {
             role: creds.role,
             node_code: creds.node.node_code,
             created_at: creds.created_at
+        };
+    }
+
+    async resetNodeCredentialPassword(nodeId: string, email: string | undefined, plainPass: string, actor?: string) {
+        if (!plainPass) {
+            throw new BadRequestException('Password is required');
+        }
+
+        let existing;
+
+        if (email) {
+            existing = await this.prisma.nodeCredential.findUnique({
+                where: { email },
+                include: { node: true }
+            });
+        } else {
+            existing = await this.prisma.nodeCredential.findFirst({
+                where: { node_id: nodeId },
+                orderBy: { created_at: 'desc' },
+                include: { node: true }
+            });
+        }
+
+        if (!existing || existing.node_id !== nodeId) {
+            throw new NotFoundException('Node credential not found for this node');
+        }
+
+        const salt = await bcrypt.genSalt();
+        const password_hash = await bcrypt.hash(plainPass, salt);
+
+        const updated = await this.prisma.nodeCredential.update({
+            where: { id: existing.id },
+            data: { password_hash },
+            include: { node: true }
+        });
+
+        await this.prisma.auditLog.create({
+            data: {
+                event: 'NODE_CREDENTIAL_PASSWORD_RESET',
+                node_id: nodeId,
+                actor,
+                metadata: { email: updated.email, role: updated.role }
+            }
+        });
+
+        // Return reset credential once so admin UI can show/copy it immediately.
+        return {
+            email: updated.email,
+            password: plainPass,
+            role: updated.role,
+            node_code: updated.node.node_code,
+            created_at: updated.created_at,
+            reset_at: new Date()
         };
     }
 
