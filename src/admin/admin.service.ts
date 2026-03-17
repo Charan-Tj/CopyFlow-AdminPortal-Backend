@@ -196,6 +196,19 @@ export class AdminService {
         const nodes = await this.prisma.node.findMany({
             include: {
                 kiosks: true,
+                credentials: {
+                    select: {
+                        email: true,
+                        created_at: true,
+                    },
+                    orderBy: { created_at: 'desc' },
+                    take: 1,
+                },
+                _count: {
+                    select: {
+                        credentials: true,
+                    },
+                },
                 jobs: {
                     where: { createdAt: { gte: today } }
                 }
@@ -204,6 +217,8 @@ export class AdminService {
 
         return nodes.map(n => {
             const isOnline = n.kiosks.some(k => (new Date().getTime() - k.last_heartbeat.getTime()) < 60000);
+            const hasCredentials = n._count.credentials > 0;
+            const latestCredential = n.credentials[0] || null;
             return {
                 id: n.id,
                 node_code: n.node_code,
@@ -216,7 +231,10 @@ export class AdminService {
                 jobs_today: n.jobs.length,
                 revenue_today: n.jobs.filter(j => j.status === 'PAID').reduce((sum, j) => sum + Number(j.payable_amount), 0),
                 is_online: isOnline,
-                qr_token: n.qr_token
+                qr_token: n.qr_token,
+                has_credentials: hasCredentials,
+                credential_email: latestCredential?.email || null,
+                credential_created_at: latestCredential?.created_at || null,
             };
         });
     }
@@ -286,15 +304,25 @@ export class AdminService {
         };
     }
 
-    async resetNodeCredentialPassword(nodeId: string, email: string, plainPass: string, actor?: string) {
-        if (!email || !plainPass) {
-            throw new BadRequestException('Email and password are required');
+    async resetNodeCredentialPassword(nodeId: string, email: string | undefined, plainPass: string, actor?: string) {
+        if (!plainPass) {
+            throw new BadRequestException('Password is required');
         }
 
-        const existing = await this.prisma.nodeCredential.findUnique({
-            where: { email },
-            include: { node: true }
-        });
+        let existing;
+
+        if (email) {
+            existing = await this.prisma.nodeCredential.findUnique({
+                where: { email },
+                include: { node: true }
+            });
+        } else {
+            existing = await this.prisma.nodeCredential.findFirst({
+                where: { node_id: nodeId },
+                orderBy: { created_at: 'desc' },
+                include: { node: true }
+            });
+        }
 
         if (!existing || existing.node_id !== nodeId) {
             throw new NotFoundException('Node credential not found for this node');
