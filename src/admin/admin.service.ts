@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
-import { RazorpayService } from '../payment/razorpay/razorpay.service';
+import { PhonepeService } from '../payment/phonepe/phonepe.service';
+import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import { WhatsappQueueService } from '../whatsapp/whatsapp.queue';
 import * as bcrypt from 'bcrypt';
 import * as qrcode from 'qrcode';
@@ -12,7 +13,8 @@ export class AdminService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly whatsappService: WhatsappService,
-        private readonly razorpayService: RazorpayService,
+        private readonly phonepeService: PhonepeService,
+        private readonly cashfreeService: CashfreeService,
         private readonly whatsappQueue: WhatsappQueueService
     ) { }
     
@@ -193,14 +195,33 @@ export class AdminService {
             throw new BadRequestException(`Kiosk is not ready for printing: ${kioskStatus.reason}`);
         }
 
-        const paymentLinkObj = await this.razorpayService.createPaymentLink(
-            Number(job.payable_amount),
-            jobId,
-            `Re-Payment for Print Job ${jobId.substring(0, 8)}`,
-            '9999999999'
-        );
+        const amount = Number(job.payable_amount);
+        const phone = (job.phone_number || '').replace(/^(whatsapp:|telegram:|web:)/, '') || '9999999999';
+        const description = `Re-Payment for Print Job ${jobId.substring(0, 8)}`;
 
-        return { paymentLink: paymentLinkObj.short_url || 'https://razorpay.com/' };
+        let phonepeLink: string | null = null;
+        try {
+            phonepeLink = await this.phonepeService.createPaymentLink(amount, jobId, phone);
+        } catch {
+            phonepeLink = null;
+        }
+
+        let cashfreeLink: string | null = null;
+        try {
+            cashfreeLink = await this.cashfreeService.createPaymentLink(amount, jobId, phone, description);
+        } catch {
+            cashfreeLink = null;
+        }
+
+        if (!phonepeLink && !cashfreeLink) {
+            throw new BadRequestException('No active payment gateway available to generate link');
+        }
+
+        return {
+            paymentLink: phonepeLink || cashfreeLink,
+            phonepe_link: phonepeLink,
+            cashfree_link: cashfreeLink
+        };
     }
 
     async getSessions() {

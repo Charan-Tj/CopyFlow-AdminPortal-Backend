@@ -1,5 +1,4 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
-import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import axios from 'axios';
@@ -47,7 +46,6 @@ export class WhatsappService {
     private sessionCache = new Map<string, ChatState>();
 
     constructor(
-        @Inject(forwardRef(() => RazorpayService)) private readonly razorpayService: RazorpayService,
         @Inject(forwardRef(() => PhonepeService)) private readonly phonepeService: PhonepeService,
         @Inject(forwardRef(() => CashfreeService)) private readonly cashfreeService: CashfreeService,
         private readonly supabaseStorage: SupabaseStorageService,
@@ -123,7 +121,7 @@ export class WhatsappService {
     }
 
     /**
-     * Look up session by jobId (reference_id from Razorpay).
+     * Look up session by jobId (reference_id from payment link providers).
      * Used by PaymentService when phone-based lookup fails.
      */
     async getSessionByJobId(jobId: string): Promise<{ sender: string; session: ChatState } | undefined> {
@@ -256,7 +254,7 @@ export class WhatsappService {
                     '1. Send your files (PDF/Word/image)\n' +
                     '2. Tap "Done" when finished uploading\n' +
                     '3. Select copies, color, and sides\n' +
-                    '4. Pay via the Razorpay link\n' +
+                    '4. Pay via the payment link\n' +
                     '5. Your files are printed automatically!\n\n' +
                     '📋 *Commands:*\n' +
                     '/start — Start a new print session\n' +
@@ -358,7 +356,7 @@ export class WhatsappService {
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
                 session.step = 'AWAITING_PAYMENT';
                 await this.saveSession(sender, session);
-                return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
+                return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
             }
 
             // Stuck in AWAITING_FLOW without interactiveData (shouldn't happen but just in case)
@@ -536,16 +534,19 @@ export class WhatsappService {
 
                 session.step = 'AWAITING_PAYMENT';
                 await this.saveSession(sender, session);
-                return await this.createRazorpayLinkAndNotify(session, sender, pricePerPage);
+                return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
             }
 
             if (session.step === 'AWAITING_PAYMENT') {
-                let msgLinks = `🔗 Razorpay: ${session.paymentLink}`;
+                let msgLinks = '';
+                if (session.paymentLink) {
+                    msgLinks = `🔗 Payment link: ${session.paymentLink}`;
+                }
                 if (session.phonepeLink) {
-                    msgLinks += `\n🔗 PhonePe: ${session.phonepeLink}`;
+                    msgLinks += `${msgLinks ? '\\n' : ''}🔗 PhonePe: ${session.phonepeLink}`;
                 }
                 if (session.cashfreeLink) {
-                    msgLinks += `\n🔗 Cashfree: ${session.cashfreeLink}`;
+                    msgLinks += `${msgLinks ? '\\n' : ''}🔗 Cashfree: ${session.cashfreeLink}`;
                 }
                 const msg = `We are waiting for your payment of ₹${session.price} to be confirmed.\n\n${msgLinks}`;
                 try {
@@ -570,9 +571,9 @@ export class WhatsappService {
         }
     }
 
-    private async createRazorpayLinkAndNotify(session: ChatState, sender: string, pricePerPage: number): Promise<string | null> {
+    private async createPaymentLinksAndNotify(session: ChatState, sender: string, pricePerPage: number): Promise<string | null> {
         try {
-            this.logger.log(`Starting to create Razorpay link. Price: ${session.price}, Color: ${session.color}, Sides: ${session.sides}`);
+            this.logger.log(`Starting to create payment links. Price: ${session.price}, Color: ${session.color}, Sides: ${session.sides}`);
 
             // Bug 4 fix: ensure a nodeId is set before payment
             await this.ensureNodeId(session);
@@ -599,18 +600,11 @@ export class WhatsappService {
             const cleanedPhone = sender.replace(/^(whatsapp:|telegram:)/, '');
 
             await this.sendTypingIndicator(sender);
-            this.logger.log('Creating payment link via razorpayService...');
             const isColorStr = session.color ? 'Color' : 'Black and White';
             const fileCount = session.files.length;
             const description = `Print job (${fileCount} file${fileCount > 1 ? 's' : ''}, ${session.copies || 1}x ${session.sides} ${isColorStr})`;
 
-            const paymentLinkObj = await this.razorpayService.createPaymentLink(
-                session.price as number,
-                referenceId,
-                description,
-                cleanedPhone
-            );
-            session.paymentLink = paymentLinkObj.short_url;
+            session.paymentLink = undefined;
 
             try {
                 this.logger.log('Creating payment link via phonepeService...');
@@ -620,6 +614,9 @@ export class WhatsappService {
                     cleanedPhone
                 );
                 session.phonepeLink = phonepeLink;
+                if (!session.paymentLink) {
+                    session.paymentLink = phonepeLink;
+                }
             } catch (err: any) {
                 this.logger.error(`Error generating PhonePe link: ${err.message}`);
             }
@@ -632,9 +629,18 @@ export class WhatsappService {
                     cleanedPhone,
                     description // Using description for 'link_purpose'
                 );
-                if (cashfreeLink) session.cashfreeLink = cashfreeLink;
+                if (cashfreeLink) {
+                    session.cashfreeLink = cashfreeLink;
+                    if (!session.paymentLink) {
+                        session.paymentLink = cashfreeLink;
+                    }
+                }
             } catch (err: any) {
                 this.logger.error(`Error generating Cashfree link: ${err.message}`);
+            }
+
+            if (!session.paymentLink && !session.phonepeLink && !session.cashfreeLink) {
+                throw new Error('No payment gateway is currently available');
             }
 
             // Persist session with jobId so webhook can look it up after restart
@@ -642,12 +648,15 @@ export class WhatsappService {
 
             const filesText = fileCount > 1 ? `${fileCount} files, ${session.pages || 1} total pages` : `${session.pages || 1} pages`;
 
-            let messageLinks = `🔗 Pay via Razorpay: ${session.paymentLink}`;
+            let messageLinks = '';
+            if (session.paymentLink) {
+                messageLinks = `🔗 Payment link: ${session.paymentLink}`;
+            }
             if (session.phonepeLink) {
-                messageLinks += `\n🔗 Pay via PhonePe: ${session.phonepeLink}`;
+                messageLinks += `${messageLinks ? '\\n' : ''}🔗 Pay via PhonePe: ${session.phonepeLink}`;
             }
             if (session.cashfreeLink) {
-                messageLinks += `\n🔗 Pay via Cashfree: ${session.cashfreeLink}`;
+                messageLinks += `${messageLinks ? '\\n' : ''}🔗 Pay via Cashfree: ${session.cashfreeLink}`;
             }
 
             const msg = `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total: ₹${session.price}\n\n${messageLinks}\n\nWe will start printing once payment is confirmed.`;
@@ -659,8 +668,8 @@ export class WhatsappService {
                 return msg;
             }
         } catch (error: any) {
-            const errorMsg = error?.error?.description || error?.message || 'Unknown Razorpay error';
-            this.logger.error(`Error creating Razorpay payment link: ${errorMsg}`);
+            const errorMsg = error?.error?.description || error?.message || 'Unknown payment gateway error';
+            this.logger.error(`Error creating payment link: ${errorMsg}`);
             try {
                 await this.sendTypingIndicator(sender);
                 await this.sendTextMessage(sender, 'Sorry, there was an issue generating your payment link. Please try again later.');
@@ -697,8 +706,8 @@ export class WhatsappService {
     }
 
     /**
-     * Sends an immediate "payment received, printing soon" notification.
-     * Called right after Razorpay confirms payment so the user isn't left
+    * Sends an immediate "payment received, printing soon" notification.
+    * Called right after payment confirmation so the user isn't left
      * waiting in silence. Does NOT delete the session — we keep it alive
      * so the kiosk-acknowledge path can send the final "job printed" message.
      */

@@ -34,7 +34,7 @@ export class TokensService {
 
         const expiry = Date.now() + 1000 * 60 * 60; // 1 hour
         const payload = `${jobId}:${kioskId}:${expiry}`;
-        const secret = process.env.RAZORPAY_WEBHOOK_SECRET || 'fallback_secret';
+        const secret = process.env.PRINT_TOKEN_SECRET || 'fallback_secret';
 
         const signature = crypto
             .createHmac('sha256', secret)

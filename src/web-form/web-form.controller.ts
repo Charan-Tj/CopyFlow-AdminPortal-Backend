@@ -76,7 +76,7 @@ export class WebFormController {
      *   - sides        — "single" or "double"
      *   - node_code    — (optional) shop code; auto-assigned when omitted
      *
-     * Returns job summary + Razorpay (and optional PhonePe) payment links.
+    * Returns job summary + available payment links.
      */
     @Post('submit')
     @HttpCode(HttpStatus.CREATED)

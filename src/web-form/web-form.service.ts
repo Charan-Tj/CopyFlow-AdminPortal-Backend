@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
-import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import { PaymentService } from '../payment/payment.service';
@@ -35,7 +34,6 @@ export class WebFormService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly supabaseStorage: SupabaseStorageService,
-        private readonly razorpayService: RazorpayService,
         private readonly phonepeService: PhonepeService,
         private readonly cashfreeService: CashfreeService,
         private readonly paymentService: PaymentService,
@@ -229,14 +227,6 @@ export class WebFormService {
         const colorLabel = dto.color_mode === 'COLOR' ? 'Color' : 'Black & White';
         const description = `CopyFlow Print (${uploadedFiles.length} file${uploadedFiles.length > 1 ? 's' : ''}, ${dto.copies}x ${dto.sides} ${colorLabel})`;
 
-        const razorpayObj = await this.razorpayService.createPaymentLink(
-            totalPrice,
-            referenceId,
-            description,
-            dto.phone_number,
-        );
-        const razorpayLink: string = razorpayObj.short_url;
-
         let phonepeLink: string | null = null;
         try {
             phonepeLink = await this.phonepeService.createPaymentLink(
@@ -269,9 +259,9 @@ export class WebFormService {
             sides: dto.sides,
             price: totalPrice,
             price_per_page: pricePerPage,
-            razorpay_link: razorpayLink,
             phonepe_link: phonepeLink,
             cashfree_link: cashfreeLink,
+            payment_link: phonepeLink || cashfreeLink,
             node_name: node.name,
             node_code: node.node_code,
             college: node.college,
