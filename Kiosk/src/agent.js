@@ -1,7 +1,6 @@
 require('dotenv').config();
 
 const crypto = require('node:crypto');
-const path = require('node:path');
 const express = require('express');
 const { listPrinters } = require('./printers');
 const serverApi = require('./serverApi');
@@ -46,7 +45,6 @@ let queueBusy = false;
 const sessions = new Map();
 
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, '..', 'public')));
 
 function getSessionToken(req) {
   const authHeader = String(req.headers.authorization || '').trim();
