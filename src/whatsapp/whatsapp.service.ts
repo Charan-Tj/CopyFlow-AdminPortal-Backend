@@ -19,7 +19,7 @@ interface UploadedFile {
 }
 
 interface ChatState {
-    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW' | 'PAID' | 'PRINTED';
+    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW' | 'AWAITING_CONFIRMATION' | 'PAID' | 'PRINTED';
     nodeId?: string;
     nodeCode?: string;
     files: UploadedFile[];
@@ -381,9 +381,11 @@ export class WhatsappService {
                 session.sides = flowInput.sides === 'double' ? 'double' : 'single';
                 const pricePerPage = session.color ? 10 : 2;
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
-                session.step = 'AWAITING_PAYMENT';
+                session.step = 'AWAITING_CONFIRMATION';
                 await this.saveSession(sender, session);
-                return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
+                const summary = this.generateOrderSummary(session, pricePerPage);
+                await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
+                return null;
             }
 
             // Stuck in AWAITING_FLOW without interactiveData (shouldn't happen but just in case)
@@ -558,7 +560,39 @@ export class WhatsappService {
 
                 const pricePerPage = session.color ? 10 : 2;
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
-                return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
+                session.step = 'AWAITING_CONFIRMATION';
+                await this.saveSession(sender, session);
+                const summary = this.generateOrderSummary(session, pricePerPage);
+                await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
+                return null;
+            }
+
+            if (session.step === 'AWAITING_CONFIRMATION') {
+                const pricePerPage = session.color ? 10 : 2;
+                if (normalizedMessage.includes('confirm_pay') || normalizedMessage.includes('confirm') || normalizedMessage === 'pay' || normalizedMessage === 'yes') {
+                    session.step = 'AWAITING_PAYMENT';
+                    await this.saveSession(sender, session);
+                    return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
+                } else if (normalizedMessage === 'edit_form' || normalizedMessage.includes('edit')) {
+                    if (session.useFlow && sender.startsWith('whatsapp:')) {
+                        session.step = 'AWAITING_FLOW';
+                        await this.saveSession(sender, session);
+                        await this.sendTypingIndicator(sender);
+                        await this.sendContentMessage(sender, 'cf_print_flow');
+                        return null;
+                    } else {
+                        session.step = 'AWAITING_COPIES';
+                        await this.saveSession(sender, session);
+                        await this.sendTypingIndicator(sender);
+                        await this.sendContentMessage(sender, 'cf_copies_list');
+                        return null;
+                    }
+                } else {
+                    const summary = this.generateOrderSummary(session, pricePerPage);
+                    await this.sendTypingIndicator(sender);
+                    await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
+                    return null;
+                }
             }
 
             if (session.step === 'AWAITING_PAYMENT') {
@@ -607,6 +641,14 @@ export class WhatsappService {
             this.logger.error(`Error processing message: ${globalError.message}`);
             throw globalError;
         }
+    }
+
+    private generateOrderSummary(session: ChatState, pricePerPage: number): string {
+        const fileCount = session.files?.length || 0;
+        const filesText = fileCount > 1 ? `${fileCount} files, ${session.pages || 1} total pages` : `${session.pages || 1} pages`;
+        const isColorStr = session.color ? 'Color' : 'Black and White';
+        const price = session.price || ((session.pages || 1) * (session.copies || 1) * pricePerPage);
+        return `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total Amount: ₹${price}`;
     }
 
     private async createPaymentLinksAndNotify(session: ChatState, sender: string, pricePerPage: number): Promise<string | null> {
