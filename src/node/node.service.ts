@@ -117,21 +117,30 @@ export class NodeService {
         const supabase = createClient(supabaseUrl, supabaseKey);
 
         const jobsWithUrls = await Promise.all(jobs.map(async (job) => {
-            let signedFileUrl = job.file_url;
-            if (job.file_url) {
-                const urlParts = job.file_url.split('/');
+            const rawFileUrls = Array.isArray(job.file_urls)
+                ? (job.file_urls as any[])
+                : [];
+
+            const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+                const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
+                const urlParts = String(rawUrl).split('/');
                 const filename = urlParts[urlParts.length - 1];
-                if (filename) {
-                    const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-                    if (data?.signedUrl) {
-                        signedFileUrl = data.signedUrl;
-                    }
+                if (!filename) {
+                    return null;
                 }
-            }
+
+                const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
+                const signedUrl = data?.signedUrl || rawUrl;
+                const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
+                return {
+                    url: signedUrl,
+                    copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(job.copies || 1)
+                };
+            }));
 
             return {
                 ...job,
-                file_url: signedFileUrl,
+                file_urls: signedFileUrls.filter((entry) => Boolean(entry)),
                 expires_at: new Date(now.getTime() + 15 * 60 * 1000)
             };
         }));
@@ -281,21 +290,30 @@ export class NodeService {
         const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
         const supabase = createClient(supabaseUrl, supabaseKey);
 
-        let signedFileUrl = updatedJob.file_url;
-        if (updatedJob.file_url) {
-            const urlParts = updatedJob.file_url.split('/');
+        const rawFileUrls = Array.isArray(updatedJob.file_urls)
+            ? (updatedJob.file_urls as any[])
+            : [];
+
+        const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+            const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
+            const urlParts = String(rawUrl).split('/');
             const filename = urlParts[urlParts.length - 1];
-            if (filename) {
-                const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-                if (data?.signedUrl) {
-                    signedFileUrl = data.signedUrl;
-                }
+            if (!filename) {
+                return null;
             }
-        }
+
+            const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
+            const signedUrl = data?.signedUrl || rawUrl;
+            const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
+            return {
+                url: signedUrl,
+                copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(updatedJob.copies || 1)
+            };
+        }));
 
         return {
             job_id: updatedJob.job_id,
-            file_url: signedFileUrl,
+            file_urls: signedFileUrls.filter((entry) => Boolean(entry)),
             file_checksum: updatedJob.file_checksum,
             copies: updatedJob.copies,
             color: updatedJob.color_mode === 'COLOR',

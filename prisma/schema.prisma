@@ -44,7 +44,7 @@ model PrintJob {
   phone_number        String?
   copies              Int                      @default(1)
   sides               String                   @default("single")
-  file_url            String?
+  file_urls           Json?
   file_checksum       String?
   page_count          Int
   color_mode          ColorMode
