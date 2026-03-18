@@ -1,5 +1,4 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
-import * as crypto from 'crypto';
 import { PrintService } from '../print/print.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 
@@ -15,34 +14,13 @@ export class PaymentService {
     ) { }
 
     /**
-     * Verifies the Razorpay webhook signature for authenticity
-     */
-    verifyPaymentSignature(body: string, signature: string): boolean {
-        const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
-
-        if (!secret) {
-            this.logger.error('RAZORPAY_WEBHOOK_SECRET environment variable is missing.');
-            return false;
-        }
-
-        // Create expected signature using crypto HMAC
-        const expectedSignature = crypto
-            .createHmac('sha256', secret)
-            .update(body)
-            .digest('hex');
-
-        return expectedSignature === signature;
-    }
-
-    /**
      * Upon successful payment confirmation, processes it and calls the print service.
      * On success, tells the user via WhatsApp that the job is printing.
      */
     async processPaymentAndTriggerPrint(orderId: string, paymentDetails: any): Promise<void> {
-        this.logger.log(`Processing confirmed webhook payment for Razorpay order: ${orderId}`);
+        this.logger.log(`Processing confirmed webhook payment for order: ${orderId}`);
 
-        // ── Bug 2 fix: look up session by jobId (our reference_id) first ──
-        // The orderId from `payment_link.paid` is our reference_id (e.g. `wa_1709...`).
+        // Prefer lookup by provider reference_id first.
         let session: any = undefined;
         let sender: string | undefined;
 

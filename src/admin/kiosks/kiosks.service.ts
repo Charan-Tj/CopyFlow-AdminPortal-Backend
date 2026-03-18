@@ -1,14 +1,20 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { evaluateKioskStatus } from '../../node/kiosk-status.util';
 
 @Injectable()
 export class KiosksService {
     constructor(private prisma: PrismaService) { }
 
     async findAll() {
-        return this.prisma.kiosk.findMany({
+        const kiosks = await this.prisma.kiosk.findMany({
             orderBy: { pi_id: 'asc' },
         });
+
+        return kiosks.map((kiosk) => ({
+            ...kiosk,
+            status_snapshot: evaluateKioskStatus(kiosk)
+        }));
     }
 
     async refillKiosk(pi_id: string, userEmail: string) {

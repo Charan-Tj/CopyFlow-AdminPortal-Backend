@@ -41,6 +41,12 @@ export class WebFormController {
         return this.webFormService.getActiveNodes();
     }
 
+    @Get('nodes/:nodeCode/status')
+    @ApiOperation({ summary: 'Get kiosk readiness status for a specific print shop' })
+    getNodeKioskStatus(@Param('nodeCode') nodeCode: string) {
+        return this.webFormService.getNodeKioskStatus(nodeCode);
+    }
+
     /**
      * Return current per-page prices (B&W and colour).
      */
@@ -70,7 +76,7 @@ export class WebFormController {
      *   - sides        — "single" or "double"
      *   - node_code    — (optional) shop code; auto-assigned when omitted
      *
-     * Returns job summary + Razorpay (and optional PhonePe) payment links.
+    * Returns job summary + available payment links.
      */
     @Post('submit')
     @HttpCode(HttpStatus.CREATED)

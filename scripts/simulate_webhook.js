@@ -1,58 +1,42 @@
 const crypto = require('crypto');
 const axios = require('axios');
 
-const secret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret';
+const saltKey = process.env.PHONEPE_SALT_KEY || 'test-salt-key';
+const saltIndex = process.env.PHONEPE_SALT_INDEX || '1';
 const orderId = process.argv[2] || 'order_test_123';
-const jobId = process.argv[3] || 'job_test_123';
 
-const payload = {
-    "entity": "event",
-    "account_id": "acc_test",
-    "event": "order.paid",
-    "contains": [
-        "payment",
-        "order"
-    ],
-    "payload": {
-        "payment": {
-            "entity": {
-                "id": "pay_test_123",
-                "entity": "payment",
-                "amount": 5000,
-                "currency": "INR",
-                "status": "captured",
-                "order_id": orderId,
-                "method": "card"
-            }
-        },
-        "order": {
-            "entity": {
-                "id": orderId,
-                "entity": "order",
-                "amount": 5000,
-                "amount_paid": 5000,
-                "amount_due": 0,
-                "currency": "INR",
-                "receipt": "receipt_123",
-                "status": "paid",
-                "attempts": 1
-            }
-        }
+const phonePeResponse = {
+    success: true,
+    code: 'PAYMENT_SUCCESS',
+    message: 'Payment processed',
+    data: {
+        merchantTransactionId: orderId,
+        transactionId: `txn_${Date.now()}`,
+        amount: 5000,
+        state: 'COMPLETED',
     },
-    "created_at": 1612345678
 };
 
-const body = JSON.stringify(payload);
-const signature = crypto.createHmac('sha256', secret).update(body).digest('hex');
+const base64Response = Buffer.from(JSON.stringify(phonePeResponse)).toString('base64');
+const checksum = crypto
+    .createHash('sha256')
+    .update(base64Response + saltKey)
+    .digest('hex');
+const xVerify = `${checksum}###${saltIndex}`;
 
-console.log(`Sending Webhook for Order: ${orderId}`);
-console.log(`Signature: ${signature}`);
+console.log(`Sending PhonePe webhook for Order: ${orderId}`);
+console.log(`X-VERIFY: ${xVerify}`);
 
-axios.post('http://localhost:3000/webhooks/razorpay', payload, {
-    headers: {
-        'x-razorpay-signature': signature,
-        'Content-Type': 'application/json'
-    }
-})
-    .then(res => console.log('Response:', res.data))
-    .catch(err => console.error('Error:', err.response ? err.response.data : err.message));
+axios
+    .post(
+        'http://localhost:3000/payment-webhook/phonepe',
+        { response: base64Response },
+        {
+            headers: {
+                'x-verify': xVerify,
+                'Content-Type': 'application/json',
+            },
+        }
+    )
+    .then((res) => console.log('Response:', res.data))
+    .catch((err) => console.error('Error:', err.response ? err.response.data : err.message));

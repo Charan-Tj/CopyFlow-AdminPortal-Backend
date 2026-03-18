@@ -4,7 +4,7 @@ graph TD
     Admin[Admin/Operator]
 
     %% External Systems
-    Razorpay[Razorpay Payment Gateway]
+    PaymentGateway[PhonePe / Cashfree Gateway]
     ChatAPI[Twilio / Meta / Telegram API]
 
     %% Frontend & Kiosk
@@ -44,8 +44,8 @@ graph TD
     WhatsappMod -->|Calculates Price| Prisma
     WhatsappMod <-->|Generates Link| PaymentMod
     
-    UserClient -->|"Pays for Job"| Razorpay
-    Razorpay -->|"Webhook (Payment Success)"| PaymentMod
+    UserClient -->|"Pays for Job"| PaymentGateway
+    PaymentGateway -->|"Webhook (Payment Success)"| PaymentMod
     
     PaymentMod -->|Generates Print Token & Marks Paid| Prisma
     PaymentMod -->|Notifies Success| WhatsappMod

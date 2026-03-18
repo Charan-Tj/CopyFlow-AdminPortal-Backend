@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { createClient } from '@supabase/supabase-js';
+import { deriveRuntimeStatus, evaluateKioskStatus } from './kiosk-status.util';
 
 @Injectable()
 export class NodeService {
@@ -82,6 +83,7 @@ export class NodeService {
             data: {
                 last_heartbeat: new Date(),
                 paper_level: paperLevel,
+                runtime_status: deriveRuntimeStatus(paperLevel, printers),
                 printer_list: printers
             }
         });
@@ -155,7 +157,8 @@ export class NodeService {
                     data: {
                         last_heartbeat: eventTime,
                         printer_list: printers,
-                        paper_level: hasLowConsumables ? 'LOW' : 'HIGH'
+                        paper_level: hasLowConsumables ? 'LOW' : 'HIGH',
+                        runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printers)
                     }
                 });
             }
@@ -321,6 +324,19 @@ export class NodeService {
         }
 
         return { success: true, status: 'FAILED' };
+    }
+
+    async getKioskStatus(nodeId: string) {
+        const kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: nodeId },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const snapshot = evaluateKioskStatus(kiosk);
+        return {
+            nodeId,
+            ...snapshot
+        };
     }
 
     // ============================================================

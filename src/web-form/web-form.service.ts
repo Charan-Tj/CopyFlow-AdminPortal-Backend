@@ -6,11 +6,11 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseStorageService } from '../storage/supabase-storage.service';
-import { RazorpayService } from '../payment/razorpay/razorpay.service';
 import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import { PaymentService } from '../payment/payment.service';
 import { SubmitPrintOrderDto } from './dto/submit-print-order.dto';
+import { evaluateKioskStatus } from '../node/kiosk-status.util';
 
 interface MulterFile {
     originalname: string;
@@ -34,7 +34,6 @@ export class WebFormService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly supabaseStorage: SupabaseStorageService,
-        private readonly razorpayService: RazorpayService,
         private readonly phonepeService: PhonepeService,
         private readonly cashfreeService: CashfreeService,
         private readonly paymentService: PaymentService,
@@ -101,6 +100,44 @@ export class WebFormService {
         };
     }
 
+    async getNodeKioskStatus(nodeCode: string) {
+        const node = await this.prisma.node.findFirst({
+            where: { node_code: { equals: nodeCode, mode: 'insensitive' } },
+            select: { id: true, node_code: true, name: true }
+        });
+
+        if (!node) {
+            throw new NotFoundException(`Shop "${nodeCode}" not found`);
+        }
+
+        const kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: node.id },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const snapshot = evaluateKioskStatus(kiosk);
+        return {
+            node_id: node.id,
+            node_code: node.node_code,
+            node_name: node.name,
+            ...snapshot
+        };
+    }
+
+    private async assertKioskPrintingReady(nodeId: string, nodeCode: string) {
+        const kiosk = await this.prisma.kiosk.findFirst({
+            where: { node_id: nodeId },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        const snapshot = evaluateKioskStatus(kiosk);
+        if (!snapshot.isPrintingReady) {
+            throw new BadRequestException(
+                `Shop ${nodeCode} is not ready for printing: ${snapshot.reason}. Payment link is blocked until kiosk is ready.`
+            );
+        }
+    }
+
     async submitOrder(
         files: MulterFile[],
         dto: SubmitPrintOrderDto,
@@ -132,6 +169,9 @@ export class WebFormService {
                 throw new NotFoundException('No active print shops available');
             }
         }
+
+        // Hard business rule: no payment link if kiosk is offline or not print-ready.
+        await this.assertKioskPrintingReady(node.id, node.node_code);
 
         // Upload and analyse each file
         const uploadedFiles: UploadedFileResult[] = [];
@@ -187,14 +227,6 @@ export class WebFormService {
         const colorLabel = dto.color_mode === 'COLOR' ? 'Color' : 'Black & White';
         const description = `CopyFlow Print (${uploadedFiles.length} file${uploadedFiles.length > 1 ? 's' : ''}, ${dto.copies}x ${dto.sides} ${colorLabel})`;
 
-        const razorpayObj = await this.razorpayService.createPaymentLink(
-            totalPrice,
-            referenceId,
-            description,
-            dto.phone_number,
-        );
-        const razorpayLink: string = razorpayObj.short_url;
-
         let phonepeLink: string | null = null;
         try {
             phonepeLink = await this.phonepeService.createPaymentLink(
@@ -227,9 +259,9 @@ export class WebFormService {
             sides: dto.sides,
             price: totalPrice,
             price_per_page: pricePerPage,
-            razorpay_link: razorpayLink,
             phonepe_link: phonepeLink,
             cashfree_link: cashfreeLink,
+            payment_link: phonepeLink || cashfreeLink,
             node_name: node.name,
             node_code: node.node_code,
             college: node.college,

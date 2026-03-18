@@ -54,6 +54,14 @@ export class NodeController {
     }
 
     @UseGuards(NodeAuthGuard)
+    @Get('status')
+    @ApiOperation({ summary: 'Get kiosk runtime/printing status for the node' })
+    async getStatus(@Request() req: any) {
+        const nodeId = req.node.nodeId;
+        return this.nodeService.getKioskStatus(nodeId);
+    }
+
+    @UseGuards(NodeAuthGuard)
     @Post('events')
     @ApiOperation({ summary: 'Ingest kiosk runtime events for persistence and reconciliation' })
     async ingestEvent(@Request() req: any, @Body() body: any) {

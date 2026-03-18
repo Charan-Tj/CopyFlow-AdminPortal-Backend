@@ -194,6 +194,49 @@ async function testConnection() {
   };
 }
 
+async function testCredentials(nodeEmail, nodePassword) {
+  if (!client) {
+    return {
+      ok: false,
+      error: 'Server URL is not configured'
+    };
+  }
+
+  if (!nodeEmail || !nodePassword) {
+    return {
+      ok: false,
+      error: 'Node email/password are required'
+    };
+  }
+
+  try {
+    const response = await client.post(config.loginPath, {
+      email: nodeEmail,
+      password: nodePassword
+    });
+
+    const token = response.data?.access_token || null;
+    if (!token) {
+      return {
+        ok: false,
+        error: 'Login response did not include access_token'
+      };
+    }
+
+    return {
+      ok: true,
+      accessToken: token
+    };
+  } catch (error) {
+    const status = error?.response?.status;
+    const details = error?.response?.data?.message || error.message;
+    return {
+      ok: false,
+      error: status ? `Login failed (${status}): ${details}` : `Login failed: ${details}`
+    };
+  }
+}
+
 async function fetchPendingJobs() {
   if (!isEnabled()) {
     return [];
@@ -231,6 +274,7 @@ module.exports = {
   getConfig,
   updateConfig,
   testConnection,
+  testCredentials,
   fetchPendingJobs,
   sendEvent,
   reportPrinterStatus,

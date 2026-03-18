@@ -8,7 +8,7 @@ async function main() {
     await prisma.payment.create({
         data: {
             job_id: jobId,
-            razorpay_order_id: orderId,
+            provider_order_id: orderId,
             amount: 10.00,
             currency: 'INR',
             status: 'created',
