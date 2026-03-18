@@ -1,0 +1,17 @@
+name: copyflow-backend
+region: sgp    # Singapore — closest to India
+
+services:
+  - name: api
+    github:
+      repo: Charan-Tj/CopyFlow-AdminPortal-Backend
+      branch: main
+      deploy_on_push: true
+    build_command: npm install && npx prisma generate && npm run build
+    run_command: node dist/main.js
+    environment_slug: node-js
+    instance_size_slug: apps-s-1vcpu-0.5gb   # $5/mo plan
+    instance_count: 1
+    http_port: 3000
+    routes:
+      - path: /
