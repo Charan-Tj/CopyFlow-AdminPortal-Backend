@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException, ConflictException, NotFoundException
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'node:crypto';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { createClient } from '@supabase/supabase-js';
 import { deriveRuntimeStatus, evaluateKioskStatus } from './kiosk-status.util';
@@ -14,6 +15,23 @@ export class NodeService {
         @Inject(forwardRef(() => WhatsappService))
         private whatsappService: WhatsappService
     ) { }
+
+    private async getOrCreateKiosk(nodeId: string) {
+        const existing = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
+        if (existing) {
+            return existing;
+        }
+
+        return this.prisma.kiosk.create({
+            data: {
+                pi_id: `kiosk_${nodeId}_1`,
+                node_id: nodeId,
+                secret: randomUUID(),
+                paper_level: 'HIGH',
+                runtime_status: 'ONLINE'
+            }
+        });
+    }
 
     async login(email: string, pass: string) {
         const cred = await this.prisma.nodeCredential.findUnique({
@@ -61,22 +79,7 @@ export class NodeService {
     }
 
     async updateHeartbeat(nodeId: string, paperLevel: string, printers: any[]) {
-        // Find existing kiosk for this node or create a generic one
-        let kiosk = await this.prisma.kiosk.findFirst({
-            where: { node_id: nodeId }
-        });
-
-        if (!kiosk) {
-            // Create a default kiosk for the node if it doesn't exist
-            kiosk = await this.prisma.kiosk.create({
-                data: {
-                    pi_id: `kiosk_${nodeId}_1`,
-                    node_id: nodeId,
-                    secret: 'default_secret',
-                    paper_level: paperLevel
-                }
-            });
-        }
+        const kiosk = await this.getOrCreateKiosk(nodeId);
 
         await this.prisma.kiosk.update({
             where: { pi_id: kiosk.pi_id },
@@ -150,18 +153,16 @@ export class NodeService {
                 return supplies.some((supply: any) => Number(supply?.percent ?? 100) <= 15);
             });
 
-            const kiosk = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
-            if (kiosk) {
-                await this.prisma.kiosk.update({
-                    where: { pi_id: kiosk.pi_id },
-                    data: {
-                        last_heartbeat: eventTime,
-                        printer_list: printers,
-                        paper_level: hasLowConsumables ? 'LOW' : 'HIGH',
-                        runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printers)
-                    }
-                });
-            }
+            const kiosk = await this.getOrCreateKiosk(nodeId);
+            await this.prisma.kiosk.update({
+                where: { pi_id: kiosk.pi_id },
+                data: {
+                    last_heartbeat: eventTime,
+                    printer_list: printers,
+                    paper_level: hasLowConsumables ? 'LOW' : 'HIGH',
+                    runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printers)
+                }
+            });
         }
 
         if (type === 'JOB_UPDATE') {
@@ -190,21 +191,14 @@ export class NodeService {
 
         if (type === 'HEARTBEAT') {
             const isReady = Boolean(payload?.readiness?.ready ?? false);
-            const reasonsIfNotReady = Array.isArray(payload?.readiness?.reasons_if_not_ready)
-                ? payload.readiness.reasons_if_not_ready
-                : [];
-            const uptimeSeconds = Number(payload?.liveness?.uptime_seconds ?? 0);
-
-            const kiosk = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
-            if (kiosk) {
-                await this.prisma.kiosk.update({
-                    where: { pi_id: kiosk.pi_id },
-                    data: {
-                        last_heartbeat: eventTime,
-                        runtime_status: isReady ? 'ONLINE' : 'DEGRADED'
-                    }
-                });
-            }
+            const kiosk = await this.getOrCreateKiosk(nodeId);
+            await this.prisma.kiosk.update({
+                where: { pi_id: kiosk.pi_id },
+                data: {
+                    last_heartbeat: eventTime,
+                    runtime_status: isReady ? 'ONLINE' : 'DEGRADED'
+                }
+            });
         }
 
         await this.prisma.auditLog.create({
