@@ -4,9 +4,11 @@ const MAX_AUDIT = 500;
 const MAX_NOTIFICATIONS = 200;
 
 const state = {
+  startTimestamp: Date.now(),
   startedAt: new Date().toISOString(),
   lastHeartbeatAt: new Date().toISOString(),
   lastPollAt: null,
+  eventSequenceNumber: 0,
   queuePaused: false,
   queue: [],
   printers: [],
@@ -155,6 +157,15 @@ function recordCompletionMetrics(job) {
   }
 }
 
+function getUptimeSeconds() {
+  return Math.floor((Date.now() - state.startTimestamp) / 1000);
+}
+
+function getNextSequenceNumber() {
+  state.eventSequenceNumber += 1;
+  return state.eventSequenceNumber;
+}
+
 module.exports = {
   state,
   addLog,
@@ -168,5 +179,7 @@ module.exports = {
   registerPayment,
   trimOldJobs,
   touchHeartbeat,
-  recordCompletionMetrics
+  recordCompletionMetrics,
+  getUptimeSeconds,
+  getNextSequenceNumber
 };

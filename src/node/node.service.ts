@@ -188,6 +188,25 @@ export class NodeService {
             }
         }
 
+        if (type === 'HEARTBEAT') {
+            const isReady = Boolean(payload?.readiness?.ready ?? false);
+            const reasonsIfNotReady = Array.isArray(payload?.readiness?.reasons_if_not_ready)
+                ? payload.readiness.reasons_if_not_ready
+                : [];
+            const uptimeSeconds = Number(payload?.liveness?.uptime_seconds ?? 0);
+
+            const kiosk = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
+            if (kiosk) {
+                await this.prisma.kiosk.update({
+                    where: { pi_id: kiosk.pi_id },
+                    data: {
+                        last_heartbeat: eventTime,
+                        runtime_status: isReady ? 'ONLINE' : 'DEGRADED'
+                    }
+                });
+            }
+        }
+
         await this.prisma.auditLog.create({
             data: {
                 event: `AGENT_${type}`,

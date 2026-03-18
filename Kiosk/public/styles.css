@@ -330,6 +330,16 @@ body {
   animation: slotBlink 1.2s ease-in-out infinite;
 }
 
+.hero-orbit.online:not(.processing) .printer-body::before {
+  animation: slotBlink 2s ease-in-out infinite;
+}
+
+.hero-orbit.online .ring {
+  border-top-color: rgba(210, 255, 224, 0.98);
+  border-right-color: rgba(120, 226, 157, 0.8);
+  box-shadow: 0 0 0 3px rgba(46, 157, 79, 0.22), 0 0 28px rgba(46, 157, 79, 0.25);
+}
+
 .overview-grid,
 .split-grid {
   margin-top: 1rem;

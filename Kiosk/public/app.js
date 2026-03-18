@@ -88,6 +88,15 @@ function renderList(elementId, lines) {
   }
 }
 
+function updateKioskTitle(name) {
+  const title = String(name || '').trim() || 'Local Kiosk';
+  const heading = document.getElementById('kioskTitle');
+  if (heading) {
+    heading.textContent = title;
+  }
+  document.title = `${title} | CopyFlow`;
+}
+
 function setupTabs() {
   const buttons = document.querySelectorAll('.menu-btn');
   const panels = document.querySelectorAll('.tab-panel');
@@ -167,12 +176,15 @@ async function refresh() {
     readJson('/api/logs', { logs: [] })
   ]);
 
+  updateKioskTitle(dashboard.kiosk?.name || dashboard.kiosk?.agentId || 'Local Kiosk');
+
   const healthEl = document.getElementById('health');
   healthEl.textContent = dashboard.health.ok
     ? `Agent running | server connected: ${dashboard.health.serverConnected ? 'yes' : 'no'} | queue: ${dashboard.health.queuePaused ? 'paused' : 'active'}`
     : 'Agent health endpoint unavailable';
 
   const orbit = document.getElementById('printerOrbit');
+  orbit.classList.toggle('online', Boolean(dashboard.health?.serverConnected));
   const ownerBadge = document.getElementById('activeJobOwner');
   const paperName = document.getElementById('paperName');
   const activeJob = (dashboard.jobs || []).find((job) =>

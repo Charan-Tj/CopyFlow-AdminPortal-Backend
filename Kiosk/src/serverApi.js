@@ -20,6 +20,7 @@ let client = createClient(config.serverUrl);
 let accessToken = process.env.AGENT_TOKEN || null;
 let lastAuthAt = null;
 let lastError = null;
+let nodeInfo = null;
 
 function createClient(serverUrl) {
   if (!serverUrl) {
@@ -50,6 +51,9 @@ function sanitizeConfigForOutput() {
     eventsPath: config.eventsPath,
     loginPath: config.loginPath,
     connected: isConnected(),
+    nodeName: nodeInfo?.name || null,
+    nodeCode: nodeInfo?.code || null,
+    nodeId: nodeInfo?.id || null,
     lastAuthAt,
     lastError
   };
@@ -85,6 +89,7 @@ function updateConfig(partial = {}) {
   }
 
   accessToken = null;
+  nodeInfo = null;
   lastAuthAt = null;
   lastError = null;
 
@@ -117,16 +122,19 @@ async function loginIfNeeded(force = false) {
     });
 
     accessToken = response.data?.access_token || null;
+    nodeInfo = response.data?.node || null;
     if (accessToken) {
       lastAuthAt = new Date().toISOString();
       lastError = null;
     } else {
       lastError = 'Login response did not include access_token';
+      nodeInfo = null;
     }
 
     return Boolean(accessToken);
   } catch (error) {
     accessToken = null;
+    nodeInfo = null;
     lastAuthAt = null;
     const status = error?.response?.status;
     const details = error?.response?.data?.message || error.message;
@@ -225,7 +233,8 @@ async function testCredentials(nodeEmail, nodePassword) {
 
     return {
       ok: true,
-      accessToken: token
+      accessToken: token,
+      node: response.data?.node || null
     };
   } catch (error) {
     const status = error?.response?.status;
@@ -268,6 +277,33 @@ async function reportJobUpdate(jobId, status, details = {}) {
   await sendEvent('JOB_UPDATE', { jobId, status, details });
 }
 
+async function reportHeartbeat(isReady, reasonsIfNotReady = [], uptimeSeconds = 0, sequenceNumber = 0, eventId = null) {
+  const crypto = require('crypto');
+  
+  if (!isEnabled()) {
+    return;
+  }
+
+  const payload = {
+    liveness: {
+      signal: true,
+      uptime_seconds: uptimeSeconds
+    },
+    readiness: {
+      ready: isReady,
+      reasons_if_not_ready: reasonsIfNotReady || []
+    },
+    auth: {
+      authenticated: Boolean(accessToken),
+      token_expires_in: accessToken ? 1800 : 0
+    },
+    sequenceNumber,
+    eventId: eventId || crypto.randomUUID()
+  };
+
+  await sendEvent('HEARTBEAT', payload);
+}
+
 module.exports = {
   isEnabled,
   isConnected,
@@ -278,5 +314,6 @@ module.exports = {
   fetchPendingJobs,
   sendEvent,
   reportPrinterStatus,
-  reportJobUpdate
+  reportJobUpdate,
+  reportHeartbeat
 };

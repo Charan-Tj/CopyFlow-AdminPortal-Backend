@@ -20,18 +20,22 @@ const {
   registerPayment,
   trimOldJobs,
   touchHeartbeat,
-  recordCompletionMetrics
+  recordCompletionMetrics,
+  getUptimeSeconds,
+  getNextSequenceNumber
 } = require('./state');
 
 const app = express();
 const port = Number(process.env.PORT || 4173);
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 10000);
 const printerSyncMs = Number(process.env.PRINTER_SYNC_MS || 30000);
+const heartbeatMs = Number(process.env.HEARTBEAT_MS || 12000); // 12 seconds
 const lifecycleSweepMs = Number(process.env.LIFECYCLE_SWEEP_MS || 60000);
 const dashboardSessionTtlMs = Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000);
 const snmpEnabled = String(process.env.SNMP_ENABLED || 'false').toLowerCase() === 'true';
 const snmpCommunity = process.env.SNMP_COMMUNITY || 'public';
 const snmpTimeoutMs = Number(process.env.SNMP_TIMEOUT_MS || 2000);
+const minInkLevelPercent = Number(process.env.MIN_INK_LEVEL || 10); // 10% threshold
 const dashboardUser = process.env.KIOSK_DASHBOARD_USER || 'admin';
 const dashboardPassword = process.env.KIOSK_DASHBOARD_PASSWORD || 'admin123';
 const defaultServerUrl = process.env.KIOSK_DEFAULT_SERVER_URL || process.env.SERVER_URL || 'http://localhost:3000';
@@ -341,7 +345,18 @@ function computeReconciliation() {
 }
 
 function dashboardSnapshot() {
+  const connection = serverApi.getConfig();
+  const kioskName =
+    String(process.env.KIOSK_NAME || '').trim() ||
+    connection.nodeName ||
+    connection.agentId ||
+    'Local Kiosk';
+
   return {
+    kiosk: {
+      name: kioskName,
+      agentId: connection.agentId || 'local-agent'
+    },
     health: {
       ok: true,
       serverConnected: serverApi.isConnected(),
@@ -803,6 +818,62 @@ async function syncPrinterStatus() {
   }
 }
 
+function evaluateReadiness() {
+  const readinessInfo = {
+    ready: false,
+    reasons: []
+  };
+
+  if (!serverApi.isConnected()) {
+    readinessInfo.reasons.push('BACKEND_DISCONNECTED');
+    return readinessInfo;
+  }
+
+  if (!state.printers || state.printers.length === 0) {
+    readinessInfo.reasons.push('NO_PRINTERS');
+    return readinessInfo;
+  }
+
+  const onlinePrinters = state.printers.filter((p) => !p.workOffline);
+  if (onlinePrinters.length === 0) {
+    readinessInfo.reasons.push('NO_ONLINE_PRINTER');
+    return readinessInfo;
+  }
+
+  const readyPrinters = onlinePrinters.filter((p) => {
+    const inkLevel = Number(p.supply_level || p.ink_level || 0);
+    return inkLevel > minInkLevelPercent;
+  });
+
+  if (readyPrinters.length === 0) {
+    readinessInfo.reasons.push('LOW_INK_ALL_PRINTERS');
+    return readinessInfo;
+  }
+
+  readinessInfo.ready = true;
+  readinessInfo.reasons = [];
+  return readinessInfo;
+}
+
+async function sendHeartbeat() {
+  try {
+    const readiness = evaluateReadiness();
+    const uptimeSeconds = getUptimeSeconds();
+    const sequenceNumber = getNextSequenceNumber();
+    const eventId = require('crypto').randomUUID();
+
+    await serverApi.reportHeartbeat(
+      readiness.ready,
+      readiness.reasons,
+      uptimeSeconds,
+      sequenceNumber,
+      eventId
+    );
+  } catch (error) {
+    // Silent fail for heartbeat
+  }
+}
+
 async function pollPendingJobs() {
   if (pollingBusy) {
     return;
@@ -837,6 +908,7 @@ app.listen(port, () => {
   // Kick off once on startup, then run intervals.
   syncPrinterStatus();
   pollPendingJobs();
+  sendHeartbeat();
 
   setInterval(() => {
     touchHeartbeat();
@@ -845,4 +917,5 @@ app.listen(port, () => {
 
   setInterval(syncPrinterStatus, printerSyncMs);
   setInterval(pollPendingJobs, pollIntervalMs);
+  setInterval(sendHeartbeat, heartbeatMs);
 });
