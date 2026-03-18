@@ -19,6 +19,10 @@ export type KioskStatusSnapshot = {
 };
 
 const DEFAULT_ONLINE_WINDOW_MS = Number(process.env.KIOSK_ONLINE_WINDOW_MS || 120000);
+const EXEMPT_TEST_KIOSKS = String(process.env.EXEMPT_TEST_KIOSKS || 'TEST01')
+  .split(',')
+  .map((code) => code.trim().toUpperCase())
+  .filter(Boolean);
 
 function parseHeartbeatMs(lastHeartbeat?: Date | string | null): number | null {
   if (!lastHeartbeat) {
@@ -53,8 +57,32 @@ function countPrinters(printerList: unknown): { total: number; online: number } 
 
 export function evaluateKioskStatus(
   kiosk: KioskLike | null,
-  onlineWindowMs = DEFAULT_ONLINE_WINDOW_MS
+  onlineWindowMs = DEFAULT_ONLINE_WINDOW_MS,
+  nodeCode?: string | null
 ): KioskStatusSnapshot {
+  const normalizedNodeCode = String(nodeCode || '').trim().toUpperCase();
+  const isExemptTestKiosk = normalizedNodeCode.length > 0 && EXEMPT_TEST_KIOSKS.includes(normalizedNodeCode);
+
+  if (isExemptTestKiosk) {
+    const runtimeStatus = String(kiosk?.runtime_status || 'ONLINE').toUpperCase();
+    const paperLevel = String(kiosk?.paper_level || 'HIGH').toUpperCase();
+    const heartbeatMs = parseHeartbeatMs(kiosk?.last_heartbeat);
+    const heartbeatAgeMs = heartbeatMs === null ? null : Date.now() - heartbeatMs;
+    const { total, online } = countPrinters(kiosk?.printer_list);
+
+    return {
+      kioskId: kiosk?.pi_id || null,
+      runtimeStatus,
+      paperLevel,
+      isOnline: true,
+      isPrintingReady: true,
+      reason: 'READY (test kiosk exemption)',
+      heartbeatAgeMs,
+      totalPrinters: total,
+      onlinePrinters: online
+    };
+  }
+
   if (!kiosk) {
     return {
       kioskId: null,

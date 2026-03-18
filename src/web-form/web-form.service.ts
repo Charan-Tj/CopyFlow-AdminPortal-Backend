@@ -115,7 +115,7 @@ export class WebFormService {
             orderBy: { updatedAt: 'desc' }
         });
 
-        const snapshot = evaluateKioskStatus(kiosk);
+        const snapshot = evaluateKioskStatus(kiosk, undefined, node.node_code);
         return {
             node_id: node.id,
             node_code: node.node_code,
@@ -130,7 +130,7 @@ export class WebFormService {
             orderBy: { updatedAt: 'desc' }
         });
 
-        const snapshot = evaluateKioskStatus(kiosk);
+        const snapshot = evaluateKioskStatus(kiosk, undefined, nodeCode);
         if (!snapshot.isPrintingReady) {
             throw new BadRequestException(
                 `Shop ${nodeCode} is not ready for printing: ${snapshot.reason}. Payment link is blocked until kiosk is ready.`

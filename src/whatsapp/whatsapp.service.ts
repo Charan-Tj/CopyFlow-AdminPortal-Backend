@@ -158,13 +158,13 @@ export class WhatsappService {
         }
     }
 
-    private async getNodeKioskStatusSnapshot(nodeId: string) {
+    private async getNodeKioskStatusSnapshot(nodeId: string, nodeCode?: string) {
         const kiosk = await this.prisma.kiosk.findFirst({
             where: { node_id: nodeId },
             orderBy: { updatedAt: 'desc' }
         });
 
-        return evaluateKioskStatus(kiosk);
+        return evaluateKioskStatus(kiosk, undefined, nodeCode);
     }
 
     private async sendContentMessage(to: string, contentSid: string, variables: any = {}) {
@@ -581,7 +581,7 @@ export class WhatsappService {
                 throw new Error('No print shop is assigned for this job');
             }
 
-            const kioskStatus = await this.getNodeKioskStatusSnapshot(session.nodeId);
+            const kioskStatus = await this.getNodeKioskStatusSnapshot(session.nodeId, session.nodeCode);
             if (!kioskStatus.isPrintingReady) {
                 const blockMessage = `⚠️ The selected kiosk is currently not ready for printing (${kioskStatus.reason}). Payment link was not generated. Please try again in a few minutes.`;
                 try {
