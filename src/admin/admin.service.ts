@@ -15,7 +15,12 @@ export class AdminService {
         private readonly whatsappQueue: WhatsappQueueService
     ) { }
     
-    private isRecentlyOnline(lastHeartbeat?: Date | null, windowMs = 60000) {
+    private isRecentlyOnline(lastHeartbeat?: Date | null, windowMs = 60000, nodeCode?: string) {
+        // TEST01 is always considered ready for testing/development
+        if (nodeCode === 'TEST01') {
+            return true;
+        }
+        
         if (!lastHeartbeat) return false;
         const heartbeatMs = new Date(lastHeartbeat).getTime();
         if (Number.isNaN(heartbeatMs)) return false;
@@ -132,7 +137,7 @@ export class AdminService {
             const nodeRevenueToday = n.jobs
                 .filter(j => j.status === 'PAID')
                 .reduce((sum, j) => sum + Number(j.payable_amount), 0);
-            const isOnline = n.kiosks.some(k => this.isRecentlyOnline(k.last_heartbeat));
+            const isOnline = n.kiosks.some(k => this.isRecentlyOnline(k.last_heartbeat, 60000, n.node_code));
             return {
                 id: n.id, node_code: n.node_code, name: n.name,
                 jobs_today: nodeJobsToday, revenue_today: nodeRevenueToday, is_online: isOnline
@@ -296,7 +301,7 @@ export class AdminService {
         }
 
         return nodes.map((n: any) => {
-            const isOnline = n.kiosks.some((k: any) => this.isRecentlyOnline(k.last_heartbeat));
+            const isOnline = n.kiosks.some((k: any) => this.isRecentlyOnline(k.last_heartbeat, 60000, n.node_code));
             const hasCredentials = n._count.credentials > 0;
             const latestCredential = n.credentials[0] || null;
             return {
