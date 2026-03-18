@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException, ConflictException, NotFoundException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import { R2Service } from '../r2/r2.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -9,7 +10,7 @@ import { deriveRuntimeStatus, evaluateKioskStatus } from './kiosk-status.util';
 
 @Injectable()
 export class NodeService {
-    constructor(
+    constructor(private readonly r2Storage: R2Service, 
         private prisma: PrismaService,
         private jwtService: JwtService,
         @Inject(forwardRef(() => WhatsappService))
@@ -112,28 +113,22 @@ export class NodeService {
             }
         });
 
-        const supabaseUrl = process.env.SUPABASE_URL || '';
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-        const supabase = createClient(supabaseUrl, supabaseKey);
-
         const jobsWithUrls = await Promise.all(jobs.map(async (job) => {
             const rawFileUrls = Array.isArray(job.file_urls)
                 ? (job.file_urls as any[])
                 : [];
 
             const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+                let signedFileUrl = '';
                 const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
                 const urlParts = String(rawUrl).split('/');
                 const filename = urlParts[urlParts.length - 1];
-                if (!filename) {
-                    return null;
+                if (filename) {
+                    signedFileUrl = await this.r2Storage.getSignedUrl(filename, 900);
                 }
-
-                const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-                const signedUrl = data?.signedUrl || rawUrl;
                 const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
                 return {
-                    url: signedUrl,
+                    url: signedFileUrl || rawUrl,
                     copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(job.copies || 1)
                 };
             }));
@@ -286,27 +281,21 @@ export class NodeService {
             }
         });
 
-        const supabaseUrl = process.env.SUPABASE_URL || '';
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-        const supabase = createClient(supabaseUrl, supabaseKey);
-
         const rawFileUrls = Array.isArray(updatedJob.file_urls)
             ? (updatedJob.file_urls as any[])
             : [];
 
         const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+            let signedFileUrl = '';
             const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
             const urlParts = String(rawUrl).split('/');
             const filename = urlParts[urlParts.length - 1];
-            if (!filename) {
-                return null;
+            if (filename) {
+                signedFileUrl = await this.r2Storage.getSignedUrl(filename, 900);
             }
-
-            const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-            const signedUrl = data?.signedUrl || rawUrl;
             const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
             return {
-                url: signedUrl,
+                url: signedFileUrl || rawUrl,
                 copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(updatedJob.copies || 1)
             };
         }));

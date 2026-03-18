@@ -5,7 +5,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SupabaseStorageService } from '../storage/supabase-storage.service';
+import { R2Service } from '../r2/r2.service';
 import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import { PaymentService } from '../payment/payment.service';
@@ -33,7 +33,7 @@ export class WebFormService {
 
     constructor(
         private readonly prisma: PrismaService,
-        private readonly supabaseStorage: SupabaseStorageService,
+        private readonly r2Storage: R2Service,
         private readonly phonepeService: PhonepeService,
         private readonly cashfreeService: CashfreeService,
         private readonly paymentService: PaymentService,
@@ -292,7 +292,7 @@ export class WebFormService {
 
         let supabaseUrl: string;
         try {
-            supabaseUrl = await this.supabaseStorage.uploadFile(file.buffer, fileName, mime);
+            supabaseUrl = await this.r2Storage.uploadFile(fileName, file.buffer, mime);
         } catch (err) {
             this.logger.error(`Failed to upload "${file.originalname}": ${err.message}`);
             throw new BadRequestException(`Could not upload file: ${file.originalname}`);

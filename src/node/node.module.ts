@@ -6,9 +6,12 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { JwtModule } from '@nestjs/jwt';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
+import { R2Module } from '../r2/r2.module';
+
 @Module({
     imports: [
         PrismaModule,
+        R2Module,
         forwardRef(() => WhatsappModule),
         JwtModule.register({
             secret: process.env.JWT_SECRET || 'secretKey',
