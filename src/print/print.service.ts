@@ -37,6 +37,16 @@ export class PrintService {
                 return false;
             }
 
+            const existingJob = await this.prisma.printJob.findUnique({
+                where: { job_id: jobData.jobId },
+                select: { job_id: true, node_id: true }
+            });
+
+            if (existingJob) {
+                this.logger.log(`Print job already exists for jobId=${jobData.jobId}; skipping duplicate create.`);
+                return true;
+            }
+
             // Ensure kiosk exists
             let kiosk = await this.prisma.kiosk.findUnique({
                 where: { pi_id: dummyKioskId }
@@ -82,7 +92,11 @@ export class PrintService {
 
             this.logger.log(`Successfully emitted 'new-job' WebSocket event to node_${jobRecord.node_id}`);
             return true;
-        } catch (error) {
+        } catch (error: any) {
+            if (error?.code === 'P2002') {
+                this.logger.warn(`Duplicate print job create ignored for jobId=${jobData.jobId}`);
+                return true;
+            }
             this.logger.error(`Failed to push job to node: ${error.message}`);
             return false;
         }

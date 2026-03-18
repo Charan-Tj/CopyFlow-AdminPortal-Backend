@@ -1,16 +1,19 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrintService } from '../print/print.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class PaymentService {
     private readonly logger = new Logger(PaymentService.name);
+    private readonly inFlightOrders = new Set<string>();
 
     constructor(
         @Inject(forwardRef(() => PrintService))
         private readonly printService: PrintService,
         @Inject(forwardRef(() => WhatsappService))
         private readonly whatsappService: WhatsappService,
+        private readonly prisma: PrismaService,
     ) { }
 
     /**
@@ -18,7 +21,30 @@ export class PaymentService {
      * On success, tells the user via WhatsApp that the job is printing.
      */
     async processPaymentAndTriggerPrint(orderId: string, paymentDetails: any): Promise<void> {
+        if (!orderId) {
+            this.logger.warn('Skipping payment processing because orderId is empty');
+            return;
+        }
+
+        if (this.inFlightOrders.has(orderId)) {
+            this.logger.log(`Skipping duplicate in-flight payment processing for order: ${orderId}`);
+            return;
+        }
+
+        this.inFlightOrders.add(orderId);
+
+        try {
         this.logger.log(`Processing confirmed webhook payment for order: ${orderId}`);
+
+        const existingJob = await this.prisma.printJob.findUnique({
+            where: { job_id: orderId },
+            select: { job_id: true, status: true }
+        });
+
+        if (existingJob) {
+            this.logger.log(`Order already processed, skipping duplicate processing for order: ${orderId}, status=${existingJob.status}`);
+            return;
+        }
 
         // Prefer lookup by provider reference_id first.
         let session: any = undefined;
@@ -80,6 +106,9 @@ export class PaymentService {
             }
         } else {
             this.logger.warn(`Could not find active whatsapp session for orderId: ${orderId}`);
+        }
+        } finally {
+            this.inFlightOrders.delete(orderId);
         }
     }
 }
