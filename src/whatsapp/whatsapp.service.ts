@@ -540,10 +540,10 @@ export class WhatsappService {
                     msgLinks = `🔗 Payment link: ${session.paymentLink}`;
                 }
                 if (session.phonepeLink) {
-                    msgLinks += `${msgLinks ? '\\n' : ''}🔗 PhonePe: ${session.phonepeLink}`;
+                    msgLinks += `${msgLinks ? '\n' : ''}🔗 PhonePe: ${session.phonepeLink}`;
                 }
                 if (session.cashfreeLink) {
-                    msgLinks += `${msgLinks ? '\\n' : ''}🔗 Cashfree: ${session.cashfreeLink}`;
+                    msgLinks += `${msgLinks ? '\n' : ''}🔗 Cashfree: ${session.cashfreeLink}`;
                 }
 
                 if (!msgLinks) {
@@ -676,10 +676,10 @@ export class WhatsappService {
                 messageLinks = `🔗 Payment link: ${session.paymentLink}`;
             }
             if (session.phonepeLink) {
-                messageLinks += `${messageLinks ? '\\n' : ''}🔗 Pay via PhonePe: ${session.phonepeLink}`;
+                messageLinks += `${messageLinks ? '\n' : ''}🔗 Pay via PhonePe: ${session.phonepeLink}`;
             }
             if (session.cashfreeLink) {
-                messageLinks += `${messageLinks ? '\\n' : ''}🔗 Pay via Cashfree: ${session.cashfreeLink}`;
+                messageLinks += `${messageLinks ? '\n' : ''}🔗 Pay via Cashfree: ${session.cashfreeLink}`;
             }
 
             const msg = `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total: ₹${session.price}\n\n${messageLinks}\n\nWe will start printing once payment is confirmed.`;
