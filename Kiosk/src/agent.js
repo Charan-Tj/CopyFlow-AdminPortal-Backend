@@ -296,6 +296,14 @@ function resolvePrinterForJob(job) {
     }
   }
 
+  const configuredDefault = String(state.settings.defaultPrinterName || '').trim();
+  if (configuredDefault) {
+    const matchingPrinter = state.printers.find((printer) => printer.name === configuredDefault);
+    if (matchingPrinter) {
+      return matchingPrinter.name;
+    }
+  }
+
   const onlinePrinter = state.printers.find((printer) => !printer.workOffline);
   if (onlinePrinter) {
     return onlinePrinter.name;
@@ -624,19 +632,44 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/connection', (_req, res) => {
-  res.json(serverApi.getConfig());
+  res.json({
+    ...serverApi.getConfig(),
+    defaultPrinterName: state.settings.defaultPrinterName,
+    availablePrinters: state.printers.map((printer) => printer.name)
+  });
 });
 
 app.post('/api/connection', (req, res) => {
+  const requestedDefaultPrinter = Object.prototype.hasOwnProperty.call(req.body || {}, 'defaultPrinterName')
+    ? String(req.body.defaultPrinterName || '').trim()
+    : null;
+
+  if (requestedDefaultPrinter !== null) {
+    if (!requestedDefaultPrinter) {
+      state.settings.defaultPrinterName = null;
+    } else {
+      const exists = state.printers.some((printer) => printer.name === requestedDefaultPrinter);
+      if (!exists) {
+        return res.status(400).json({ error: `Unknown printer: ${requestedDefaultPrinter}` });
+      }
+      state.settings.defaultPrinterName = requestedDefaultPrinter;
+    }
+  }
+
   const updated = serverApi.updateConfig(req.body || {});
   addAudit('SERVER_CONNECTION_UPDATED', req.authUser || 'dashboard-user', {
     serverUrl: updated.serverUrl,
     nodeEmail: updated.nodeEmail,
     pendingJobsPath: updated.pendingJobsPath,
     eventsPath: updated.eventsPath,
-    loginPath: updated.loginPath
+    loginPath: updated.loginPath,
+    defaultPrinterName: state.settings.defaultPrinterName
   });
-  res.json(updated);
+  res.json({
+    ...updated,
+    defaultPrinterName: state.settings.defaultPrinterName,
+    availablePrinters: state.printers.map((printer) => printer.name)
+  });
 });
 
 app.post('/api/connection/test', async (_req, res) => {

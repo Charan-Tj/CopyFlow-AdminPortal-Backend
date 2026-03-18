@@ -29,6 +29,7 @@ const state = {
     completedTimestamps: []
   },
   settings: {
+    defaultPrinterName: String(process.env.KIOSK_DEFAULT_PRINTER || '').trim() || null,
     pricing: {
       bwPerPage: Number(process.env.PRICE_BW_PER_PAGE || 2),
       colorPerPage: Number(process.env.PRICE_COLOR_PER_PAGE || 5)

@@ -146,6 +146,7 @@ async function loadConnectionForm() {
   document.getElementById('agentId').value = connection.agentId || '';
   document.getElementById('nodeEmail').value = connection.nodeEmail || '';
   document.getElementById('nodePassword').value = '';
+  document.getElementById('defaultPrinterName').value = connection.defaultPrinterName || '';
   document.getElementById('pendingJobsPath').value = connection.pendingJobsPath || '/node/jobs';
   document.getElementById('eventsPath').value = connection.eventsPath || '/node/events';
   document.getElementById('loginPath').value = connection.loginPath || '/node/auth/login';
@@ -265,6 +266,7 @@ async function submitConnection(updateOnly) {
     serverUrl: document.getElementById('serverUrl').value.trim(),
     agentId: document.getElementById('agentId').value.trim(),
     nodeEmail: document.getElementById('nodeEmail').value.trim(),
+    defaultPrinterName: document.getElementById('defaultPrinterName').value.trim(),
     pendingJobsPath: document.getElementById('pendingJobsPath').value.trim(),
     eventsPath: document.getElementById('eventsPath').value.trim(),
     loginPath: document.getElementById('loginPath').value.trim()
