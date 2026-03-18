@@ -2,7 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { WhatsappController } from './whatsapp.controller';
 import { WhatsappService } from './whatsapp.service';
 import { PaymentModule } from '../payment/payment.module';
-import { StorageModule } from '../storage/storage.module';
+import { R2Module } from '../r2/r2.module';
 import { WhatsappQueueService } from './whatsapp.queue';
 import { TwilioProvider } from './providers/twilio.provider';
 import { MetaProvider } from './providers/meta.provider';
@@ -13,7 +13,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 @Module({
     imports: [
         forwardRef(() => PaymentModule),
-        StorageModule,
+        R2Module,
         PrismaModule
     ],
     controllers: [WhatsappController],

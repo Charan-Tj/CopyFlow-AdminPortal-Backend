@@ -1,7 +1,7 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { NodeGateway } from '../node/node.gateway';
 import { PrismaService } from '../prisma/prisma.service';
-import { SupabaseStorageService } from '../storage/supabase-storage.service';
+import { R2Service } from '../r2/r2.service';
 
 @Injectable()
 export class PrintService {
@@ -12,7 +12,7 @@ export class PrintService {
         @Inject(forwardRef(() => NodeGateway))
         private readonly nodeGateway: NodeGateway,
         private readonly prisma: PrismaService,
-        private readonly storageService: SupabaseStorageService
+        private readonly r2Storage: R2Service
     ) {
         require('dotenv').config();
     }
@@ -109,16 +109,16 @@ export class PrintService {
         const filename = urlParts[urlParts.length - 1];
 
         // Use Supabase Storage to get signed URL
-        const { data, error } = await this.storageService.getClient().storage
-            .from(process.env.SUPABASE_BUCKET_NAME || 'copyflow-jobs')
-            .createSignedUrl(filename, 900); // 15 mins (900 seconds)
+        const publicUrl = await this.r2Storage.getSignedUrl(filename); return publicUrl;
+            
+            
 
-        if (error) {
+        /* if (error) {
             this.logger.error(`Error creating signed URL: ${error.message}`);
             return fileUrl; // fallback
         }
 
-        return data.signedUrl;
+        */
     }
 
     getSenderForJob(jobId: string): string | undefined {

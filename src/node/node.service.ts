@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException, ConflictException, NotFoundException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import { R2Service } from '../r2/r2.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -8,7 +9,7 @@ import { deriveRuntimeStatus, evaluateKioskStatus } from './kiosk-status.util';
 
 @Injectable()
 export class NodeService {
-    constructor(
+    constructor(private readonly r2Storage: R2Service, 
         private prisma: PrismaService,
         private jwtService: JwtService,
         @Inject(forwardRef(() => WhatsappService))
@@ -119,8 +120,8 @@ export class NodeService {
                 const urlParts = job.file_url.split('/');
                 const filename = urlParts[urlParts.length - 1];
                 if (filename) {
-                    const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-                    if (data?.signedUrl) {
+                    const data = { signedUrl: await this.r2Storage.getSignedUrl(filename, 900) };
+                    if (data.signedUrl) {
                         signedFileUrl = data.signedUrl;
                     }
                 }
@@ -292,8 +293,8 @@ export class NodeService {
             const urlParts = updatedJob.file_url.split('/');
             const filename = urlParts[urlParts.length - 1];
             if (filename) {
-                const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-                if (data?.signedUrl) {
+                const data = { signedUrl: await this.r2Storage.getSignedUrl(filename, 900) };
+                if (data.signedUrl) {
                     signedFileUrl = data.signedUrl;
                 }
             }
