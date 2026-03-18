@@ -5,9 +5,10 @@ import { PrintModule } from '../print/print.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { PhonepeService } from './phonepe/phonepe.service';
 import { CashfreeService } from './cashfree/cashfree.service';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
-    imports: [forwardRef(() => PrintModule), forwardRef(() => WhatsappModule)],
+    imports: [PrismaModule, forwardRef(() => PrintModule), forwardRef(() => WhatsappModule)],
     controllers: [PaymentController],
     providers: [PaymentService, PhonepeService, CashfreeService],
     exports: [PaymentService, PhonepeService, CashfreeService],
