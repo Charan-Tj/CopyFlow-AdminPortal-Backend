@@ -14,19 +14,34 @@ export class PhonepeService {
     private readonly isProd = process.env.PHONEPE_ENV === 'production';
     private readonly baseUrl = this.isProd ? 'https://api.phonepe.com/apis/hermes' : 'https://api-preprod.phonepe.com/apis/pg-sandbox';
 
+    private getWebRedirect(referenceId: string): string {
+        const redirectBaseUrl = process.env.PHONEPE_REDIRECT_URL || 'https://copy-flow.app/print-order';
+        return `${redirectBaseUrl}${redirectBaseUrl.includes('?') ? '&' : '?'}job_id=${encodeURIComponent(referenceId)}`;
+    }
+
+    private toAscii(value: string): string {
+        return value.replace(/[^\x00-\x7F]/g, '');
+    }
+
     private resolveRedirectUrl(source: PaymentSource, referenceId: string): string {
+        const webRedirect = this.getWebRedirect(referenceId);
+
         if (source === 'whatsapp') {
             return process.env.PHONEPE_REDIRECT_WHATSAPP_URL
                 || `https://wa.me/?text=${encodeURIComponent(`Payment successful. Order ID: ${referenceId}`)}`;
         }
 
         if (source === 'telegram') {
-            return process.env.PHONEPE_REDIRECT_TELEGRAM_URL
-                || `https://t.me/CopyFlowDev_bot?start=${encodeURIComponent(`paid_${referenceId}`)}`;
+            const configured = process.env.PHONEPE_REDIRECT_TELEGRAM_URL;
+            // PhonePe checkout has shown header-encoding issues with direct t.me redirects.
+            // Use merchant web redirect for Telegram too, then let frontend handle status UX.
+            if (configured && !configured.includes('t.me/')) {
+                return configured;
+            }
+            return webRedirect;
         }
 
-        const redirectBaseUrl = process.env.PHONEPE_REDIRECT_URL || 'https://copy-flow.app/print-order';
-        return `${redirectBaseUrl}${redirectBaseUrl.includes('?') ? '&' : '?'}job_id=${encodeURIComponent(referenceId)}`;
+        return webRedirect;
     }
 
     async createPaymentLink(
@@ -36,17 +51,21 @@ export class PhonepeService {
         source: PaymentSource = 'web'
     ) {
         const callbackUrl = process.env.PHONEPE_CALLBACK_URL || `https://nonvisional-gleamingly-amie.ngrok-free.dev/payment-webhook/phonepe`;
-        const redirectUrl = this.resolveRedirectUrl(source, referenceId);
+        const redirectUrl = this.toAscii(this.resolveRedirectUrl(source, referenceId).trim());
+        const safeCallbackUrl = this.toAscii(callbackUrl.trim());
+        const normalizedPhone = (customerPhone || '').replace(/[^0-9+]/g, '');
+        const digitsOnly = normalizedPhone.replace(/\+/g, '');
+        const mobileNumber = /^\d{10,15}$/.test(digitsOnly) ? digitsOnly : undefined;
 
         const payload = {
             merchantId: this.merchantId,
             merchantTransactionId: referenceId,
-            merchantUserId: `MUID_${customerPhone || Date.now()}`.substring(0, 36), // max 36 chars
+            merchantUserId: `MUID_${referenceId}`.substring(0, 36), // deterministic ASCII id
             amount: Math.round(amount * 100), // amount in paise
             redirectUrl, // browser redirect after payment
             redirectMode: 'REDIRECT',
-            callbackUrl: callbackUrl, // S2S webhook
-            mobileNumber: customerPhone,
+            callbackUrl: safeCallbackUrl, // S2S webhook
+            ...(mobileNumber ? { mobileNumber } : {}),
             paymentInstrument: {
                 type: 'PAY_PAGE'
             }
@@ -63,7 +82,7 @@ export class PhonepeService {
         const xVerify = `${checksum}###${this.saltIndex}`;
 
         this.logger.log(
-            `Creating PhonePe link for referenceId: ${referenceId}, source=${source}, callbackUrl=${callbackUrl}, redirectUrl=${redirectUrl}`,
+            `Creating PhonePe link for referenceId: ${referenceId}, source=${source}, callbackUrl=${safeCallbackUrl}, redirectUrl=${redirectUrl}, mobileNumber=${mobileNumber || 'omitted'}`,
         );
 
         try {
