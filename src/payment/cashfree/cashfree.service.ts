@@ -13,25 +13,6 @@ export class CashfreeService {
     private readonly isProd = process.env.CASHFREE_ENV === 'production';
     private readonly baseUrl = this.isProd ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
 
-    private appendQuery(baseUrl: string, params: Record<string, string | undefined>): string {
-        try {
-            const url = new URL(baseUrl);
-            Object.entries(params).forEach(([key, value]) => {
-                if (value) {
-                    url.searchParams.set(key, value);
-                }
-            });
-            return url.toString();
-        } catch {
-            const serialized = Object.entries(params)
-                .filter(([, value]) => !!value)
-                .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value as string)}`)
-                .join('&');
-            if (!serialized) return baseUrl;
-            return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}${serialized}`;
-        }
-    }
-
     private resolveReturnUrl(source: PaymentSource, referenceId: string): string {
         if (source === 'whatsapp') {
             return process.env.CASHFREE_REDIRECT_WHATSAPP_URL
@@ -39,20 +20,12 @@ export class CashfreeService {
         }
 
         if (source === 'telegram') {
-            const webReturnBase = process.env.CASHFREE_REDIRECT_URL || 'https://copy-flow.app/print-order';
-            const telegramReturn = process.env.CASHFREE_REDIRECT_TELEGRAM_URL || 'https://t.me/CopyFlowDev_bot';
-            return this.appendQuery(webReturnBase, {
-                job_id: referenceId,
-                source,
-                return_to: telegramReturn,
-            });
+            return process.env.CASHFREE_REDIRECT_TELEGRAM_URL
+                || `https://t.me/CopyFlowDev_bot?start=${encodeURIComponent(`paid_${referenceId}`)}`;
         }
 
         const webReturnBase = process.env.CASHFREE_REDIRECT_URL || 'https://copy-flow.app/print-order';
-        return this.appendQuery(webReturnBase, {
-            job_id: referenceId,
-            source,
-        });
+        return `${webReturnBase}${webReturnBase.includes('?') ? '&' : '?'}job_id=${encodeURIComponent(referenceId)}`;
     }
 
     async createPaymentLink(

@@ -14,34 +14,9 @@ export class PhonepeService {
     private readonly isProd = process.env.PHONEPE_ENV === 'production';
     private readonly baseUrl = this.isProd ? 'https://api.phonepe.com/apis/hermes' : 'https://api-preprod.phonepe.com/apis/pg-sandbox';
 
-    private appendQuery(baseUrl: string, params: Record<string, string | undefined>): string {
-        try {
-            const url = new URL(baseUrl);
-            Object.entries(params).forEach(([key, value]) => {
-                if (value) {
-                    url.searchParams.set(key, value);
-                }
-            });
-            return url.toString();
-        } catch {
-            const serialized = Object.entries(params)
-                .filter(([, value]) => !!value)
-                .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value as string)}`)
-                .join('&');
-            if (!serialized) return baseUrl;
-            return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}${serialized}`;
-        }
-    }
-
-    private getWebRedirect(referenceId: string, source: PaymentSource): string {
+    private getWebRedirect(referenceId: string): string {
         const redirectBaseUrl = process.env.PHONEPE_REDIRECT_URL || 'https://copy-flow.app/print-order';
-        const telegramReturn = process.env.PHONEPE_REDIRECT_TELEGRAM_URL || 'https://t.me/CopyFlowDev_bot';
-
-        return this.appendQuery(redirectBaseUrl, {
-            job_id: referenceId,
-            source,
-            return_to: source === 'telegram' ? telegramReturn : undefined,
-        });
+        return `${redirectBaseUrl}${redirectBaseUrl.includes('?') ? '&' : '?'}job_id=${encodeURIComponent(referenceId)}`;
     }
 
     private toAscii(value: string): string {
@@ -49,7 +24,7 @@ export class PhonepeService {
     }
 
     private resolveRedirectUrl(source: PaymentSource, referenceId: string): string {
-        const webRedirect = this.getWebRedirect(referenceId, source);
+        const webRedirect = this.getWebRedirect(referenceId);
 
         if (source === 'whatsapp') {
             return process.env.PHONEPE_REDIRECT_WHATSAPP_URL
@@ -57,9 +32,8 @@ export class PhonepeService {
         }
 
         if (source === 'telegram') {
-            // Always use web status redirect for Telegram, then provide a controlled
-            // return-to-telegram action from the web page.
-            return webRedirect;
+            return process.env.PHONEPE_REDIRECT_TELEGRAM_URL
+                || `https://t.me/CopyFlowDev_bot?start=${encodeURIComponent(`paid_${referenceId}`)}`;
         }
 
         return webRedirect;
