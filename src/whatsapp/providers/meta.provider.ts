@@ -102,7 +102,7 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
 
     async sendContentMessage(to: string, contentSid: string, variables?: any): Promise<void> {
         try {
-            let interactivePayload: any = null;
+            let interactivePayload: any;
 
             if (contentSid === 'cf_file_uploaded') {
                 // Rich file upload confirmation — mirrors the Telegram provider behavior
@@ -113,10 +113,22 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
 
                 interactivePayload = {
                     type: "button",
-                    body: { text: `${summary}\n\nSend more files or tap "Done" to continue.` },
+                    body: { text: "Send more files or tap 'Done' when finished." },
+                    header: { type: "text", text: summary },
                     action: {
                         buttons: [
                             { type: "reply", reply: { id: "done_uploading", title: "✅ Done" } }
+                        ]
+                    }
+                };
+            } else if (contentSid === 'cf_order_confirm') {
+                interactivePayload = {
+                    type: "button",
+                    body: { text: variables?.summary || "Order Summary" },
+                    action: {
+                        buttons: [
+                            { type: "reply", reply: { id: "confirm_pay", title: "✅ Confirm & Pay" } },
+                            { type: "reply", reply: { id: "edit_form", title: "✏️ Edit Form" } }
                         ]
                     }
                 };

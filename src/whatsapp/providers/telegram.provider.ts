@@ -148,6 +148,13 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                         [Markup.button.callback('✅ Done — Proceed to Print', 'done_uploading')],
                     ])
                 );
+            } else if (contentSid === 'cf_order_confirm') {
+                await TelegramProvider.bot.telegram.sendMessage(chatId, variables?.summary || 'Order Summary',
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('✅ Confirm & Pay', 'confirm_pay')],
+                        [Markup.button.callback('✏️ Edit Form', 'edit_form')]
+                    ])
+                );
             } else if (contentSid === 'cf_copies_list') {
                 await TelegramProvider.bot.telegram.sendMessage(chatId, 'How many copies of this document would you like?',
                     Markup.inlineKeyboard([
