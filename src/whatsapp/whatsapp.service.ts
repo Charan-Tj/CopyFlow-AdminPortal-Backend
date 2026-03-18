@@ -345,6 +345,33 @@ export class WhatsappService {
                 return null;
             }
 
+            // If previous job is already completed, transparently start a fresh session.
+            // Keep selected shop so repeat users can send the next file immediately.
+            if (session.step === 'PAID' || session.step === 'PRINTED') {
+                const preservedNodeId = session.nodeId;
+                const preservedNodeCode = session.nodeCode;
+                const preservedPlatform = session.platform;
+
+                session = {
+                    step: 'AWAITING_FILE',
+                    files: [],
+                    startedAt: Date.now(),
+                    nodeId: preservedNodeId,
+                    nodeCode: preservedNodeCode,
+                    platform: preservedPlatform,
+                };
+                await this.saveSession(sender, session);
+
+                if (!mediaUrl && normalizedMessage !== 'done' && normalizedMessage !== 'done_uploading') {
+                    await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(
+                        sender,
+                        `✅ Previous order completed. Send your next file to start a new print job.${preservedNodeCode ? `\n🏪 Shop: ${preservedNodeCode}` : ''}`,
+                    );
+                    return null;
+                }
+            }
+
             // Handle InteractiveData for AWAITING_FLOW (Meta NFM form submission)
             if (interactiveData && session.step === 'AWAITING_FLOW') {
                 this.logger.log(`Received Interactive Flow Response: ${JSON.stringify(interactiveData)}`);
