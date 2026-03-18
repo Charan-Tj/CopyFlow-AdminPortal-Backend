@@ -3,6 +3,7 @@ import { R2Service } from '../r2/r2.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'node:crypto';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { createClient } from '@supabase/supabase-js';
 import { deriveRuntimeStatus, evaluateKioskStatus } from './kiosk-status.util';
@@ -15,6 +16,23 @@ export class NodeService {
         @Inject(forwardRef(() => WhatsappService))
         private whatsappService: WhatsappService
     ) { }
+
+    private async getOrCreateKiosk(nodeId: string) {
+        const existing = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
+        if (existing) {
+            return existing;
+        }
+
+        return this.prisma.kiosk.create({
+            data: {
+                pi_id: `kiosk_${nodeId}_1`,
+                node_id: nodeId,
+                secret: randomUUID(),
+                paper_level: 'HIGH',
+                runtime_status: 'ONLINE'
+            }
+        });
+    }
 
     async login(email: string, pass: string) {
         const cred = await this.prisma.nodeCredential.findUnique({
@@ -62,22 +80,7 @@ export class NodeService {
     }
 
     async updateHeartbeat(nodeId: string, paperLevel: string, printers: any[]) {
-        // Find existing kiosk for this node or create a generic one
-        let kiosk = await this.prisma.kiosk.findFirst({
-            where: { node_id: nodeId }
-        });
-
-        if (!kiosk) {
-            // Create a default kiosk for the node if it doesn't exist
-            kiosk = await this.prisma.kiosk.create({
-                data: {
-                    pi_id: `kiosk_${nodeId}_1`,
-                    node_id: nodeId,
-                    secret: 'default_secret',
-                    paper_level: paperLevel
-                }
-            });
-        }
+        const kiosk = await this.getOrCreateKiosk(nodeId);
 
         await this.prisma.kiosk.update({
             where: { pi_id: kiosk.pi_id },
@@ -110,26 +113,29 @@ export class NodeService {
             }
         });
 
-        const supabaseUrl = process.env.SUPABASE_URL || '';
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-        const supabase = createClient(supabaseUrl, supabaseKey);
-
         const jobsWithUrls = await Promise.all(jobs.map(async (job) => {
-            let signedFileUrl = job.file_url;
-            if (job.file_url) {
-                const urlParts = job.file_url.split('/');
+            const rawFileUrls = Array.isArray(job.file_urls)
+                ? (job.file_urls as any[])
+                : [];
+
+            const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+                let signedFileUrl = '';
+                const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
+                const urlParts = String(rawUrl).split('/');
                 const filename = urlParts[urlParts.length - 1];
                 if (filename) {
-                    const data = { signedUrl: await this.r2Storage.getSignedUrl(filename, 900) };
-                    if (data.signedUrl) {
-                        signedFileUrl = data.signedUrl;
-                    }
+                    signedFileUrl = await this.r2Storage.getSignedUrl(filename, 900);
                 }
-            }
+                const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
+                return {
+                    url: signedFileUrl || rawUrl,
+                    copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(job.copies || 1)
+                };
+            }));
 
             return {
                 ...job,
-                file_url: signedFileUrl,
+                file_urls: signedFileUrls.filter((entry) => Boolean(entry)),
                 expires_at: new Date(now.getTime() + 15 * 60 * 1000)
             };
         }));
@@ -151,18 +157,16 @@ export class NodeService {
                 return supplies.some((supply: any) => Number(supply?.percent ?? 100) <= 15);
             });
 
-            const kiosk = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
-            if (kiosk) {
-                await this.prisma.kiosk.update({
-                    where: { pi_id: kiosk.pi_id },
-                    data: {
-                        last_heartbeat: eventTime,
-                        printer_list: printers,
-                        paper_level: hasLowConsumables ? 'LOW' : 'HIGH',
-                        runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printers)
-                    }
-                });
-            }
+            const kiosk = await this.getOrCreateKiosk(nodeId);
+            await this.prisma.kiosk.update({
+                where: { pi_id: kiosk.pi_id },
+                data: {
+                    last_heartbeat: eventTime,
+                    printer_list: printers,
+                    paper_level: hasLowConsumables ? 'LOW' : 'HIGH',
+                    runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printers)
+                }
+            });
         }
 
         if (type === 'JOB_UPDATE') {
@@ -191,21 +195,14 @@ export class NodeService {
 
         if (type === 'HEARTBEAT') {
             const isReady = Boolean(payload?.readiness?.ready ?? false);
-            const reasonsIfNotReady = Array.isArray(payload?.readiness?.reasons_if_not_ready)
-                ? payload.readiness.reasons_if_not_ready
-                : [];
-            const uptimeSeconds = Number(payload?.liveness?.uptime_seconds ?? 0);
-
-            const kiosk = await this.prisma.kiosk.findFirst({ where: { node_id: nodeId } });
-            if (kiosk) {
-                await this.prisma.kiosk.update({
-                    where: { pi_id: kiosk.pi_id },
-                    data: {
-                        last_heartbeat: eventTime,
-                        runtime_status: isReady ? 'ONLINE' : 'DEGRADED'
-                    }
-                });
-            }
+            const kiosk = await this.getOrCreateKiosk(nodeId);
+            await this.prisma.kiosk.update({
+                where: { pi_id: kiosk.pi_id },
+                data: {
+                    last_heartbeat: eventTime,
+                    runtime_status: isReady ? 'ONLINE' : 'DEGRADED'
+                }
+            });
         }
 
         await this.prisma.auditLog.create({
@@ -284,25 +281,28 @@ export class NodeService {
             }
         });
 
-        const supabaseUrl = process.env.SUPABASE_URL || '';
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-        const supabase = createClient(supabaseUrl, supabaseKey);
+        const rawFileUrls = Array.isArray(updatedJob.file_urls)
+            ? (updatedJob.file_urls as any[])
+            : [];
 
-        let signedFileUrl = updatedJob.file_url;
-        if (updatedJob.file_url) {
-            const urlParts = updatedJob.file_url.split('/');
+        const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+            let signedFileUrl = '';
+            const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
+            const urlParts = String(rawUrl).split('/');
             const filename = urlParts[urlParts.length - 1];
             if (filename) {
-                const data = { signedUrl: await this.r2Storage.getSignedUrl(filename, 900) };
-                if (data.signedUrl) {
-                    signedFileUrl = data.signedUrl;
-                }
+                signedFileUrl = await this.r2Storage.getSignedUrl(filename, 900);
             }
-        }
+            const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
+            return {
+                url: signedFileUrl || rawUrl,
+                copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(updatedJob.copies || 1)
+            };
+        }));
 
         return {
             job_id: updatedJob.job_id,
-            file_url: signedFileUrl,
+            file_urls: signedFileUrls.filter((entry) => Boolean(entry)),
             file_checksum: updatedJob.file_checksum,
             copies: updatedJob.copies,
             color: updatedJob.color_mode === 'COLOR',
