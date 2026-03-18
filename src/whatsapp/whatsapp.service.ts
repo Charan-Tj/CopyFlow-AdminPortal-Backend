@@ -531,9 +531,6 @@ export class WhatsappService {
 
                 const pricePerPage = session.color ? 10 : 2;
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
-
-                session.step = 'AWAITING_PAYMENT';
-                await this.saveSession(sender, session);
                 return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
             }
 
@@ -548,6 +545,20 @@ export class WhatsappService {
                 if (session.cashfreeLink) {
                     msgLinks += `${msgLinks ? '\\n' : ''}🔗 Cashfree: ${session.cashfreeLink}`;
                 }
+
+                if (!msgLinks) {
+                    session.step = 'AWAITING_SIDES';
+                    await this.saveSession(sender, session);
+                    const noLinkMsg = 'Payment link is not available right now. Please choose sides again to regenerate links.';
+                    try {
+                        await this.sendTypingIndicator(sender);
+                        await this.sendTextMessage(sender, noLinkMsg);
+                        return null;
+                    } catch {
+                        return noLinkMsg;
+                    }
+                }
+
                 const msg = `We are waiting for your payment of ₹${session.price} to be confirmed.\n\n${msgLinks}`;
                 try {
                     await this.sendTypingIndicator(sender);
@@ -583,6 +594,13 @@ export class WhatsappService {
 
             const kioskStatus = await this.getNodeKioskStatusSnapshot(session.nodeId, session.nodeCode);
             if (!kioskStatus.isPrintingReady) {
+                session.step = 'AWAITING_SIDES';
+                session.jobId = undefined;
+                session.paymentLink = undefined;
+                session.phonepeLink = undefined;
+                session.cashfreeLink = undefined;
+                await this.saveSession(sender, session);
+
                 const blockMessage = `⚠️ The selected kiosk is currently not ready for printing (${kioskStatus.reason}). Payment link was not generated. Please try again in a few minutes.`;
                 try {
                     await this.sendTypingIndicator(sender);
@@ -646,6 +664,8 @@ export class WhatsappService {
                 throw new Error('No payment gateway is currently available');
             }
 
+            session.step = 'AWAITING_PAYMENT';
+
             // Persist session with jobId so webhook can look it up after restart
             await this.saveSession(sender, session);
 
@@ -673,6 +693,12 @@ export class WhatsappService {
         } catch (error: any) {
             const errorMsg = error?.error?.description || error?.message || 'Unknown payment gateway error';
             this.logger.error(`Error creating payment link: ${errorMsg}`);
+            session.step = 'AWAITING_SIDES';
+            session.jobId = undefined;
+            session.paymentLink = undefined;
+            session.phonepeLink = undefined;
+            session.cashfreeLink = undefined;
+            await this.saveSession(sender, session);
             try {
                 await this.sendTypingIndicator(sender);
                 await this.sendTextMessage(sender, 'Sorry, there was an issue generating your payment link. Please try again later.');
