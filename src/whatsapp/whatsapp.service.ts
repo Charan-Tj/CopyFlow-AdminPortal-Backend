@@ -596,6 +596,7 @@ export class WhatsappService {
             const referenceId = `wa_${Date.now()}`;
             session.jobId = referenceId;
             session.sender = sender;
+            const paymentSource = sender.startsWith('telegram:') ? 'telegram' : 'whatsapp';
             // Strip any platform prefix (whatsapp:, telegram:, etc.) to get a clean phone number
             const cleanedPhone = sender.replace(/^(whatsapp:|telegram:)/, '');
 
@@ -611,7 +612,8 @@ export class WhatsappService {
                 const phonepeLink = await this.phonepeService.createPaymentLink(
                     session.price as number,
                     referenceId,
-                    cleanedPhone
+                    cleanedPhone,
+                    paymentSource
                 );
                 session.phonepeLink = phonepeLink;
                 if (!session.paymentLink) {
@@ -627,7 +629,8 @@ export class WhatsappService {
                     session.price as number,
                     referenceId,
                     cleanedPhone,
-                    description // Using description for 'link_purpose'
+                    description,
+                    paymentSource
                 );
                 if (cashfreeLink) {
                     session.cashfreeLink = cashfreeLink;

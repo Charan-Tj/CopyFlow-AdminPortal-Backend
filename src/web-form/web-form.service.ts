@@ -233,6 +233,7 @@ export class WebFormService {
                 totalPrice,
                 referenceId,
                 dto.phone_number,
+                'web',
             );
         } catch (err) {
             this.logger.warn(`PhonePe link could not be generated: ${err.message}`);
@@ -244,7 +245,8 @@ export class WebFormService {
                 totalPrice,
                 referenceId,
                 dto.phone_number,
-                description
+                description,
+                'web'
             );
         } catch (err) {
             this.logger.warn(`Cashfree link could not be generated: ${err.message}`);

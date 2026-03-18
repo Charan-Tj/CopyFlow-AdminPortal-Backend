@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import axios from 'axios';
 
+type PaymentSource = 'web' | 'whatsapp' | 'telegram';
+
 @Injectable()
 export class PhonepeService {
     private readonly logger = new Logger(PhonepeService.name);
@@ -12,16 +14,37 @@ export class PhonepeService {
     private readonly isProd = process.env.PHONEPE_ENV === 'production';
     private readonly baseUrl = this.isProd ? 'https://api.phonepe.com/apis/hermes' : 'https://api-preprod.phonepe.com/apis/pg-sandbox';
 
-    async createPaymentLink(amount: number, referenceId: string, customerPhone: string) {
+    private resolveRedirectUrl(source: PaymentSource, referenceId: string): string {
+        if (source === 'whatsapp') {
+            return process.env.PHONEPE_REDIRECT_WHATSAPP_URL
+                || `https://wa.me/?text=${encodeURIComponent(`Payment successful. Order ID: ${referenceId}`)}`;
+        }
+
+        if (source === 'telegram') {
+            return process.env.PHONEPE_REDIRECT_TELEGRAM_URL
+                || `https://t.me/CopyFlowDev_bot?start=${encodeURIComponent(`paid_${referenceId}`)}`;
+        }
+
+        const redirectBaseUrl = process.env.PHONEPE_REDIRECT_URL || 'https://copy-flow.app/print-order';
+        return `${redirectBaseUrl}${redirectBaseUrl.includes('?') ? '&' : '?'}job_id=${encodeURIComponent(referenceId)}`;
+    }
+
+    async createPaymentLink(
+        amount: number,
+        referenceId: string,
+        customerPhone: string,
+        source: PaymentSource = 'web'
+    ) {
         const callbackUrl = process.env.PHONEPE_CALLBACK_URL || `https://nonvisional-gleamingly-amie.ngrok-free.dev/payment-webhook/phonepe`;
+        const redirectUrl = this.resolveRedirectUrl(source, referenceId);
 
         const payload = {
             merchantId: this.merchantId,
             merchantTransactionId: referenceId,
             merchantUserId: `MUID_${customerPhone || Date.now()}`.substring(0, 36), // max 36 chars
             amount: Math.round(amount * 100), // amount in paise
-            redirectUrl: callbackUrl, // redirect back to server
-            redirectMode: 'POST',
+            redirectUrl, // browser redirect after payment
+            redirectMode: 'REDIRECT',
             callbackUrl: callbackUrl, // S2S webhook
             mobileNumber: customerPhone,
             paymentInstrument: {

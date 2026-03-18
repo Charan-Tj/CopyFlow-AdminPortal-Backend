@@ -206,14 +206,14 @@ export class AdminService {
 
         let phonepeLink: string | null = null;
         try {
-            phonepeLink = await this.phonepeService.createPaymentLink(amount, jobId, phone);
+            phonepeLink = await this.phonepeService.createPaymentLink(amount, jobId, phone, 'web');
         } catch {
             phonepeLink = null;
         }
 
         let cashfreeLink: string | null = null;
         try {
-            cashfreeLink = await this.cashfreeService.createPaymentLink(amount, jobId, phone, description);
+            cashfreeLink = await this.cashfreeService.createPaymentLink(amount, jobId, phone, description, 'web');
         } catch {
             cashfreeLink = null;
         }

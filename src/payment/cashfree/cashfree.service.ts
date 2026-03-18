@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import axios from 'axios';
 
+type PaymentSource = 'web' | 'whatsapp' | 'telegram';
+
 @Injectable()
 export class CashfreeService {
     private readonly logger = new Logger(CashfreeService.name);
@@ -11,11 +13,34 @@ export class CashfreeService {
     private readonly isProd = process.env.CASHFREE_ENV === 'production';
     private readonly baseUrl = this.isProd ? 'https://api.cashfree.com/pg' : 'https://sandbox.cashfree.com/pg';
 
-    async createPaymentLink(amount: number, referenceId: string, customerPhone: string, description: string) {
+    private resolveReturnUrl(source: PaymentSource, referenceId: string): string {
+        if (source === 'whatsapp') {
+            return process.env.CASHFREE_REDIRECT_WHATSAPP_URL
+                || `https://wa.me/?text=${encodeURIComponent(`Payment successful. Order ID: ${referenceId}`)}`;
+        }
+
+        if (source === 'telegram') {
+            return process.env.CASHFREE_REDIRECT_TELEGRAM_URL
+                || `https://t.me/CopyFlowDev_bot?start=${encodeURIComponent(`paid_${referenceId}`)}`;
+        }
+
+        const webReturnBase = process.env.CASHFREE_REDIRECT_URL || 'https://copy-flow.app/print-order';
+        return `${webReturnBase}${webReturnBase.includes('?') ? '&' : '?'}job_id=${encodeURIComponent(referenceId)}`;
+    }
+
+    async createPaymentLink(
+        amount: number,
+        referenceId: string,
+        customerPhone: string,
+        description: string,
+        source: PaymentSource = 'web'
+    ) {
         if (!this.appId || !this.secretKey) {
             this.logger.warn('Cashfree credentials not set, skipping link generation.');
             return null;
         }
+
+        const returnUrl = this.resolveReturnUrl(source, referenceId);
 
         const payload = {
             order_id: referenceId,
@@ -25,7 +50,10 @@ export class CashfreeService {
             customer_details: {
                 customer_id: customerPhone.replace(/\+/, '') || 'cust_default',
                 customer_phone: customerPhone,
-            }
+            },
+            order_meta: {
+                return_url: returnUrl,
+            },
         };
 
         this.logger.log(`Creating Cashfree order for referenceId: ${referenceId}`);
