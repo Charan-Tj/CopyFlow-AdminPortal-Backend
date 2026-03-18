@@ -2,6 +2,7 @@ import {
     Controller,
     Post,
     Get,
+    Header,
     Body,
     Param,
     UploadedFiles,
@@ -60,6 +61,10 @@ export class WebFormController {
      * Check the status of a payment/job.
      */
     @Get('status/:jobId')
+    @Header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    @Header('Pragma', 'no-cache')
+    @Header('Expires', '0')
+    @Header('Surrogate-Control', 'no-store')
     @ApiOperation({ summary: 'Check status of a print order payment' })
     async getStatus(@Param('jobId') jobId: string) {
         return this.webFormService.getJobStatus(jobId);

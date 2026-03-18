@@ -48,8 +48,18 @@ export class PaymentController {
             const decoded = JSON.parse(decodedString);
 
             if (decoded.success && decoded.code === 'PAYMENT_SUCCESS') {
-                const orderId = decoded.data.transactionId || decoded.data.merchantTransactionId;
-                this.logger.log(`Triggering print for PhonePe Order: ${orderId}`);
+                // merchantTransactionId is our internal reference (e.g. web_*, wa_*).
+                // transactionId is PhonePe's provider transaction id and cannot be used for session lookup.
+                const orderId = decoded?.data?.merchantTransactionId || decoded?.data?.transactionId;
+
+                if (!orderId) {
+                    this.logger.error(`PhonePe callback missing both merchantTransactionId and transactionId: ${decodedString}`);
+                    throw new BadRequestException('Missing PhonePe transaction reference');
+                }
+
+                this.logger.log(
+                    `Triggering print for PhonePe Order. merchantTransactionId=${decoded?.data?.merchantTransactionId}, transactionId=${decoded?.data?.transactionId}, chosenOrderId=${orderId}`,
+                );
                 await this.paymentService.processPaymentAndTriggerPrint(orderId, decoded.data);
             } else {
                 this.logger.log(`PhonePe payment not successful: ${decoded.code}`);

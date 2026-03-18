@@ -40,12 +40,15 @@ export class WebFormService {
     ) {}
 
     async getJobStatus(jobId: string) {
+        this.logger.log(`Status check requested for jobId=${jobId}`);
+
         const job = await this.prisma.printJob.findUnique({
             where: { job_id: jobId },
             select: { status: true }
         });
 
         if (job) {
+            this.logger.log(`Status check hit printJob for jobId=${jobId}, status=${job.status}`);
             return { paid: true, status: job.status };
         }
 
@@ -57,6 +60,7 @@ export class WebFormService {
         if (session) {
             const sessionData = session.data as any;
             if (sessionData && (sessionData.step === 'PAID' || sessionData.step === 'PRINTED')) {
+                this.logger.log(`Status check hit chatSession step for jobId=${jobId}, step=${sessionData.step}`);
                 return { paid: true, status: sessionData.step };
             }
 
@@ -68,6 +72,16 @@ export class WebFormService {
                 await this.paymentService.processPaymentAndTriggerPrint(jobId, {});
                 return { paid: true, status: 'PAID' }; // It might be UPLOADED in the db, but it's paid
             }
+
+            // Actively verify with PhonePe as fallback if webhook was missed/blocked
+            const isPhonePePaid = await this.phonepeService.checkOrderStatus(jobId);
+            if (isPhonePePaid) {
+                this.logger.log(`Active check found PhonePe order ${jobId} PAID, processing...`);
+                await this.paymentService.processPaymentAndTriggerPrint(jobId, {});
+                return { paid: true, status: 'PAID' };
+            }
+
+            this.logger.log(`Status check still awaiting payment for jobId=${jobId}`);
 
             return { paid: false, status: 'AWAITING_PAYMENT' };
         }

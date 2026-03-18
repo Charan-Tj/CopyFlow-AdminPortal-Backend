@@ -62,7 +62,9 @@ export class PhonepeService {
 
         const xVerify = `${checksum}###${this.saltIndex}`;
 
-        this.logger.log(`Creating PhonePe link for referenceId: ${referenceId}`);
+        this.logger.log(
+            `Creating PhonePe link for referenceId: ${referenceId}, source=${source}, callbackUrl=${callbackUrl}, redirectUrl=${redirectUrl}`,
+        );
 
         try {
             const response = await axios.post(
@@ -97,5 +99,40 @@ export class PhonepeService {
 
         const expectedXVerify = `${expectedChecksum}###${this.saltIndex}`;
         return xVerify === expectedXVerify;
+    }
+
+    async checkOrderStatus(orderId: string): Promise<boolean> {
+        const endpoint = `/pg/v1/status/${this.merchantId}/${orderId}`;
+        const checksum = crypto
+            .createHash('sha256')
+            .update(endpoint + this.saltKey)
+            .digest('hex');
+
+        const xVerify = `${checksum}###${this.saltIndex}`;
+
+        try {
+            const response = await axios.get(`${this.baseUrl}${endpoint}`, {
+                headers: {
+                    'X-VERIFY': xVerify,
+                    'X-MERCHANT-ID': this.merchantId,
+                    Accept: 'application/json',
+                },
+            });
+
+            const body = response.data || {};
+            const code = body.code || body.data?.responseCode;
+            const state = body.data?.state;
+            this.logger.log(`PhonePe status for ${orderId}: success=${body.success}, code=${code}, state=${state}`);
+
+            return body.success === true && (
+                code === 'PAYMENT_SUCCESS' ||
+                code === 'SUCCESS' ||
+                state === 'COMPLETED'
+            );
+        } catch (error: any) {
+            const errorData = error?.response?.data ? JSON.stringify(error.response.data) : error.message;
+            this.logger.warn(`PhonePe status check failed for ${orderId}: ${errorData}`);
+            return false;
+        }
     }
 }
