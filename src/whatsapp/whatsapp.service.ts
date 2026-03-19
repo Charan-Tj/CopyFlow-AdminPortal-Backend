@@ -172,7 +172,7 @@ export class WhatsappService {
         await this.resolveProvider(to).sendContentMessage(to, contentSid, variables);
     }
 
-    private async sendTextMessage(to: string, body: string) {
+    async sendTextMessage(to: string, body: string) {
         await this.resolveProvider(to).sendTextMessage(to, body);
     }
 
@@ -647,6 +647,39 @@ export class WhatsappService {
             this.logger.error(`Error processing message: ${globalError.message}`);
             throw globalError;
         }
+    }
+
+    /**
+     * Public entry point called by the PDF analysis queue processor.
+     * Analyzes a single file that was uploaded by a user.
+     */
+    async processPdfInQueue(sender: string, mediaUrl: string, mediaContentType: string, fileNum: number): Promise<void> {
+        const session = this.getSession(sender);
+        if (!session) {
+            this.logger.warn(`processPdfInQueue: no active session for ${sender}, skipping.`);
+            return;
+        }
+        await this.sendTypingIndicator(sender);
+        const { pages, supabaseUrl, fileName } = await this.getPageCount(sender, mediaUrl, mediaContentType);
+
+        const fileEntry: UploadedFile = {
+            url: supabaseUrl || mediaUrl,
+            pages,
+            name: fileName || `file_${fileNum}`,
+        };
+        session.files.push(fileEntry);
+        await this.saveSession(sender, session);
+
+        const totalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
+        const fileCount = session.files.length;
+
+        await this.sendTypingIndicator(sender);
+        await this.sendContentMessage(sender, 'cf_file_uploaded', {
+            fileNum,
+            pages,
+            totalPages,
+            fileCount,
+        });
     }
 
     private generateOrderSummary(session: ChatState, pricePerPage: number): string {
