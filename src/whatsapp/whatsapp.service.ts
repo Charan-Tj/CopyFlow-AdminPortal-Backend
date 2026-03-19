@@ -257,25 +257,26 @@ export class WhatsappService {
 
         try {
             // ─── Help command ───────────────
-            if (normalizedMessage === 'help' || normalizedMessage === '/help') {
+            if (normalizedMessage === 'help' || normalizedMessage === '/help' || normalizedMessage === 'menu') {
                 await this.sendTypingIndicator(sender);
                 await this.sendTextMessage(sender,
-                    '📖 *CopyFlow Help*\n\n' +
-                    '🖨️ *How to print:*\n' +
-                    '1. Send your files (PDF/Word/image)\n' +
-                    '2. Tap "Done" when finished uploading\n' +
-                    '3. Select copies, color, and sides\n' +
-                    '4. Pay via the payment link\n' +
-                    '5. Your files are printed automatically!\n\n' +
-                    '📋 *Commands:*\n' +
-                    '/start — Start a new print session\n' +
-                    '/shops — List available print shops\n' +
-                    '/cancel — Cancel current session\n' +
-                    '/reset — Reset and start over\n' +
-                    '/help — Show this help message\n\n' +
-                    '🏪 *Shop selection:*\n' +
-                    'Type: shop <code> to select a shop\n' +
-                    'Example: shop TESTNODE1'
+                    // HCI: Zero assumption — tell user exactly where they are + what they can do
+                    `📖 *CopyFlow Help*\n\n` +
+                    `📍 *You are here:* Step ${this.getStepLabel(session.step)}\n\n` +
+                    `🖨️ *How to print:*\n` +
+                    `1. Send your files (PDF/Word/image)\n` +
+                    `2. Type *DONE* when finished uploading\n` +
+                    `3. Choose copies, color, and sides\n` +
+                    `4. Review order summary & confirm\n` +
+                    `5. Pay via the link — prints automatically!\n\n` +
+                    `📋 *Commands:*\n` +
+                    `MENU — Show this help\n` +
+                    `SHOPS — List print shops near you\n` +
+                    `CANCEL — Abandon current job & start over\n` +
+                    `RETRY — Refresh expired payment link\n` +
+                    `DONE — Finish uploading files\n\n` +
+                    `🏪 *Select a shop:*\n` +
+                    `Type: shop <code>  e.g. shop TESTNODE1`
                 );
                 return null;
             }
@@ -473,7 +474,12 @@ export class WhatsappService {
                 // User taps "Done" — move to copies selection
                 if (normalizedMessage === 'done' || normalizedMessage === 'done_uploading') {
                     if (session.files.length === 0) {
-                        await this.sendTextMessage(sender, "You haven't uploaded any files yet. Please send a file first.");
+                        // HCI: Graceful fallback — don't dead-end, tell them exactly what to do
+                        await this.sendTextMessage(sender,
+                            `⚠️ You haven't uploaded any files yet.\n\n` +
+                            `📎 Please send a PDF, Word document, or image first.\n\n` +
+                            `💡 Type *MENU* if you need help.`
+                        );
                         return null;
                     }
 
@@ -493,6 +499,11 @@ export class WhatsappService {
                     session.step = 'AWAITING_COPIES';
                     await this.saveSession(sender, session);
                     await this.sendTypingIndicator(sender);
+                    // HCI: Status update — confirm receipt before asking next question
+                    await this.sendTextMessage(sender,
+                        `✅ Got it! ${session.files.length} file${session.files.length > 1 ? 's' : ''}, ${session.pages} page${(session.pages || 1) > 1 ? 's' : ''} total.\n\n` +
+                        `*Step 2 of 4:* How many copies do you need?`
+                    );
                     await this.sendContentMessage(sender, 'cf_copies_list');
                     return null;
                 }
@@ -533,6 +544,7 @@ export class WhatsappService {
                     const totalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
                     const fileCount = session.files.length;
 
+                    // HCI: Status update — confirm file receipt immediately
                     await this.sendTypingIndicator(sender);
                     await this.sendContentMessage(sender, 'cf_file_uploaded', {
                         fileNum,
@@ -540,20 +552,34 @@ export class WhatsappService {
                         totalPages,
                         fileCount,
                     });
+                    // HCI: Progressive disclosure — tell them exactly what to do next
+                    const nextHint = session.nodeId
+                        ? `\n\n📌 Send another file, or type *DONE* to continue.`
+                        : `\n\n📌 Send another file, or type *DONE* to continue.\n🏪 Don't forget to select a shop! Type: SHOPS`;
+                    await this.sendTextMessage(sender, nextHint);
                     return null;
                 }
 
-                // First message — welcome
+                // First message — welcome (HCI: Zero assumption — tell them exactly what to do)
                 try {
                     await this.sendTypingIndicator(sender);
-                    const shopHint = session.nodeId
-                        ? `\n🏪 Shop: ${session.nodeCode}`
-                        : '\n\n💡 To select a shop, type: shop <code>\n📍 To see available shops, type: shops';
-                    await this.sendTextMessage(sender, `Welcome to CopyFlow! 🖨️\n\nSend your files (PDF/Word/image) to get started.\nYou can send multiple files — tap "Done" when finished.${shopHint}`);
+                    const shopLine = session.nodeId
+                        ? `\n🏪 Selected shop: *${session.nodeCode}*`
+                        : `\n\n🏪 *Step 0 of 4:* First, select your print shop:\n   Type: shop <code>  e.g. shop TESTNODE1\n   Or type: SHOPS to see all available shops`;
+                    await this.sendTextMessage(sender,
+                        `👋 Welcome to *CopyFlow* — Instant Campus Printing!\n\n` +
+                        `Here's how it works:\n` +
+                        `1️⃣ Send your file(s) — PDF, Word, or image\n` +
+                        `2️⃣ Type *DONE* when all files are uploaded\n` +
+                        `3️⃣ Choose copies, color & sides\n` +
+                        `4️⃣ Pay & your files print automatically ✅\n` +
+                        `${shopLine}\n\n` +
+                        `💡 Type *MENU* anytime for help.`
+                    );
                     return null;
                 } catch (err) {
                     this.logger.error(`Send error: ${err.message}`);
-                    return 'Welcome to CopyFlow! Send your files (PDF/Word/image) to get started.';
+                    return 'Welcome to CopyFlow! Send your files (PDF/Word/image) to get started. Type MENU for help.';
                 }
             }
 
@@ -601,6 +627,8 @@ export class WhatsappService {
                 session.step = 'AWAITING_COLOR';
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
+                // HCI: Status update — echo choice, then ask next single question
+                await this.sendTextMessage(sender, `✅ ${copies} ${copies === 1 ? 'copy' : 'copies'} selected.\n\n*Step 3 of 4:* Choose print color:`);
                 await this.sendContentMessage(sender, 'cf_color_quickrep');
                 return null;
             }
@@ -611,7 +639,9 @@ export class WhatsappService {
                 } else if (normalizedMessage.includes('black') || normalizedMessage.includes('b&w') || message === 'bw') {
                     session.color = false;
                 } else {
+                    // HCI: Graceful fallback — resend options with explanation
                     await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, `❓ Please choose a print color for your ${session.pages || 1} page${(session.pages||1)>1?'s':''}:\n\n💡 Type *MENU* if you need help.`);
                     await this.sendContentMessage(sender, 'cf_color_quickrep');
                     return null;
                 }
@@ -619,6 +649,8 @@ export class WhatsappService {
                 session.step = 'AWAITING_SIDES';
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
+                // HCI: Status update — echo choice
+                await this.sendTextMessage(sender, `✅ ${session.color ? '🎨 Color' : '⬛ Black & White'} selected.\n\n*Step 4 of 4:* Choose print sides:`);
                 await this.sendContentMessage(sender, 'cf_sides_quickrep');
                 return null;
             }
@@ -629,7 +661,9 @@ export class WhatsappService {
                 } else if (normalizedMessage.includes('single') || message === 'single') {
                     session.sides = 'single';
                 } else {
+                    // HCI: Graceful fallback — resend with context
                     await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, `❓ Almost there! Choose how to print your ${session.pages || 1} pages:\n\n💡 Type *MENU* if you need help.`);
                     await this.sendContentMessage(sender, 'cf_sides_quickrep');
                     return null;
                 }
@@ -638,6 +672,9 @@ export class WhatsappService {
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
                 session.step = 'AWAITING_CONFIRMATION';
                 await this.saveSession(sender, session);
+                // HCI: Confirmation before money — always show full summary
+                await this.sendTypingIndicator(sender);
+                await this.sendTextMessage(sender, `✅ ${session.sides === 'double' ? 'Double' : 'Single'}-sided selected.\n\n🔍 *Please review your order before paying:*`);
                 const summary = this.generateOrderSummary(session, pricePerPage);
                 await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
                 return null;
@@ -646,33 +683,49 @@ export class WhatsappService {
             if (session.step === 'AWAITING_CONFIRMATION') {
                 const pricePerPage = session.color ? 10 : 2;
 
+                // HCI: Graceful fallback — MENU escape from confirmation
+                if (normalizedMessage === 'menu' || normalizedMessage === 'help' || normalizedMessage === '/help') {
+                    const summary = this.generateOrderSummary(session, pricePerPage);
+                    await this.sendTextMessage(sender,
+                        `📋 Your order is saved. Here's a reminder:\n\n${summary}\n\n` +
+                        `Reply:\n✅ *YES* to confirm and pay\n✏️ *EDIT* to change options\n❌ *CANCEL* to start over`
+                    );
+                    return null;
+                }
+
                 // Issue 6: kiosk was blocked — retry falls through to confirm logic
                 if (session.kioskBlockedAt && (normalizedMessage === 'retry' || normalizedMessage.includes('confirm'))) {
                     session.kioskBlockedAt = undefined;
                 }
 
                 if (normalizedMessage.includes('confirm_pay') || normalizedMessage.includes('confirm') || normalizedMessage === 'pay' || normalizedMessage === 'yes') {
+                    // HCI: Status update — tell user payment link is being generated
+                    await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, '⏳ Generating your payment link...');
                     session.step = 'AWAITING_PAYMENT';
                     await this.saveSession(sender, session);
                     return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
                 } else if (normalizedMessage === 'edit_form' || normalizedMessage.includes('edit')) {
+                    await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, '✏️ No problem! Let\'s update your preferences.');
                     if (session.useFlow && sender.startsWith('whatsapp:')) {
                         session.step = 'AWAITING_FLOW';
                         await this.saveSession(sender, session);
-                        await this.sendTypingIndicator(sender);
                         await this.sendContentMessage(sender, 'cf_print_flow');
                         return null;
                     } else {
                         session.step = 'AWAITING_COPIES';
                         await this.saveSession(sender, session);
-                        await this.sendTypingIndicator(sender);
                         await this.sendContentMessage(sender, 'cf_copies_list');
                         return null;
                     }
                 } else {
+                    // HCI: Graceful fallback — explicitly re-prompt with options
                     const summary = this.generateOrderSummary(session, pricePerPage);
                     await this.sendTypingIndicator(sender);
-                    await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
+                    await this.sendTextMessage(sender,
+                        `${summary}\n\nReply:\n✅ *YES* to confirm & pay\n✏️ *EDIT* to change options\n❌ *CANCEL* to start over\n\n💡 Type *MENU* for help.`
+                    );
                     return null;
                 }
             }
@@ -724,12 +777,17 @@ export class WhatsappService {
                 }
             }
 
+            // HCI: Graceful fallback — universal dead end with MENU hint
             try {
                 await this.sendTypingIndicator(sender);
-                await this.sendTextMessage(sender, 'How can I help you?');
+                await this.sendTextMessage(sender,
+                    `🤔 I didn't quite get that.\n\n` +
+                    `📍 You are at: *${this.getStepLabel(session.step)}*\n\n` +
+                    `Type *MENU* to see all options, or *CANCEL* to start over.`
+                );
                 return null;
             } catch (err) {
-                return 'How can I help you?';
+                return 'Type MENU for help or CANCEL to start over.';
             }
         } catch (globalError: any) {
             this.logger.error(`Error processing message: ${globalError.message}`);
@@ -797,6 +855,22 @@ export class WhatsappService {
         } catch (err: any) {
             this.logger.warn(`Session TTL cleanup failed: ${err.message}`);
         }
+    }
+
+    // HCI helper — human-readable step labels for context messages
+    private getStepLabel(step: string): string {
+        const labels: Record<string, string> = {
+            'AWAITING_FILE':         'Step 1 — Upload files',
+            'AWAITING_COPIES':       'Step 2 — Choose copies',
+            'AWAITING_COLOR':        'Step 3 — Choose color',
+            'AWAITING_SIDES':        'Step 4 — Choose sides',
+            'AWAITING_FLOW':         'Step 2 — Print settings form',
+            'AWAITING_CONFIRMATION': 'Review order',
+            'AWAITING_PAYMENT':      'Awaiting payment',
+            'PAID':                  'Payment confirmed',
+            'PRINTED':               'Job printed ✅',
+        };
+        return labels[step] || step;
     }
 
     // Issue 7: enhanced order summary with file names
@@ -939,12 +1013,17 @@ export class WhatsappService {
             session.phonepeLink = undefined;
             session.cashfreeLink = undefined;
             await this.saveSession(sender, session);
+            // HCI: Graceful fallback — explain what happened + escape hatch
             try {
                 await this.sendTypingIndicator(sender);
-                await this.sendTextMessage(sender, 'Sorry, there was an issue generating your payment link. Please try again later.');
+                await this.sendTextMessage(sender,
+                    `⚠️ Sorry, we couldn't generate a payment link right now.\n\n` +
+                    `Your files and preferences are saved.\n\n` +
+                    `🔄 Type *RETRY* to try again, or *CANCEL* to start over.`
+                );
                 return null;
             } catch (err) {
-                return 'Sorry, there was an issue generating your payment link. Please try again later.';
+                return 'Payment link failed. Type RETRY to try again or CANCEL to start over.';
             }
         }
     }
@@ -983,9 +1062,12 @@ export class WhatsappService {
     async notifyPaymentConfirmed(sender: string): Promise<void> {
         this.logger.log(`Sending payment-confirmed notification to ${sender}`);
         try {
+            // HCI: Status update — user never wonders "did it work?"
             await this.sendTextMessage(
                 sender,
-                '✅ Payment received! Your print job is queued and will start printing shortly.'
+                '✅ *Payment received!*\n\n' +
+                'Your print job is now in the queue.\n' +
+                '🖨️ Printing will begin shortly — you\'ll get a confirmation once it\'s done!'
             );
         } catch (error: any) {
             this.logger.error(`Failed to send payment-confirmed message to ${sender}: ${error.message}`);
@@ -1021,8 +1103,14 @@ export class WhatsappService {
         await this.deleteSession(to);
 
         try {
-            await this.sendTextMessage(to, "✅ Payment Confirmed! Your files have been sent to the printer.");
-            this.logger.log(`Successfully sent confirmation via WhatsApp to ${to}`);
+            // HCI: Status update — final confirmation so user knows it's done
+            await this.sendTextMessage(to,
+                '🖨️ *Your files are printing now!*\n\n' +
+                'Head to the print shop to collect your printout.\n\n' +
+                'Thank you for using CopyFlow! 🎉\n' +
+                'Send a new file anytime to print again.'
+            );
+            this.logger.log(`Successfully sent print confirmation to ${to}`);
             return true;
         } catch (error: any) {
             this.logger.error(`Failed to send WhatsApp confirmation. Error: ${error.message}`);
