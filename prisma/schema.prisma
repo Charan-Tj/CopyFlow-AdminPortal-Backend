@@ -73,6 +73,10 @@ model PrintJob {
   payment_events      KioskPaymentEvent[]
   failure_diagnostics KioskFailureDiagnostic[]
   lifecycle_events    KioskJobLifecycle[]
+
+  @@index([node_id, status, createdAt])
+  @@index([node_id, updatedAt])
+  @@index([node_id, status, claimed_at, createdAt])
 }
 
 model Payment {

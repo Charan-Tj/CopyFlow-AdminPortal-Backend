@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const express = require('express');
 const { listPrinters } = require('./printers');
 const serverApi = require('./serverApi');
-const { downloadFile, printPdf, cleanupFile } = require('./printService');
+const { downloadFile, printPdf, waitForSpooler, cleanupFile } = require('./printService');
 const { queryPrinterConsumables } = require('./snmp');
 const {
   state,
@@ -551,16 +551,17 @@ async function executePrintAttempt(job, attempt) {
       }
     }
 
-    const latencyMs = Date.now() - startedAtMs;
+      await waitForSpooler(printerName);
 
-    const completedJob = {
-      jobId: job.id,
-      userName: job.userName,
-      documentName: job.documentName,
-      pages: job.pages,
-      copies: job.copies,
-      color: job.color,
-      paperSize: job.paperSize,
+      const latencyMs = Date.now() - startedAtMs;
+
+      const completedJob = {
+        jobId: job.id,
+        userName: job.userName,
+        documentName: job.documentName,
+        pages: job.pages,
+        copies: job.copies,
+        paperSize: job.paperSize,
       price: estimateCost(job),
       printerName,
       status: 'PRINTED',

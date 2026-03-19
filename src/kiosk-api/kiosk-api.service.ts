@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { NodeService } from '../node/node.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,6 +8,15 @@ type SessionRecord = {
   userName: string;
   mode: 'local' | 'node';
   expiresAt: number;
+  node?: NodeContext;
+};
+
+type DashboardStatsRow = {
+  total_jobs: bigint | number;
+  successful_jobs: bigint | number;
+  failed_jobs: bigint | number;
+  total_revenue: Prisma.Decimal | number | string | null;
+  total_pages: bigint | number | null;
 };
 
 type ConnectionConfig = {
@@ -41,6 +51,13 @@ export class KioskApiService {
     process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000,
   );
   private readonly sessions = new Map<string, SessionRecord>();
+  private readonly dashboardCacheTtlMs = Number(
+    process.env.KIOSK_DASHBOARD_CACHE_MS || 2000,
+  );
+  private readonly dashboardCache = new Map<
+    string,
+    { value: unknown; expiresAt: number }
+  >();
   private readonly heartbeatIntervalMs = Number(
     process.env.KIOSK_BRIDGE_HEARTBEAT_MS || 15000,
   );
@@ -70,6 +87,7 @@ export class KioskApiService {
     lastError: null,
     lastCheckedAt: null,
   };
+  private connectedNodeContext: NodeContext | null = null;
 
   constructor(
     private readonly nodeService: NodeService,
@@ -153,7 +171,13 @@ export class KioskApiService {
     this.connectionState.lastCheckedAt = new Date().toISOString();
     await this.maybeEmitHeartbeat(nodeLogin.node?.id, latestPrinters);
 
-    const token = this.createSession(userName, 'node');
+    const nodeContext: NodeContext = {
+      id: String(nodeLogin.node?.id || ''),
+      name: String(nodeLogin.node?.name || ''),
+      code: String(nodeLogin.node?.code || ''),
+    };
+    this.connectedNodeContext = nodeContext;
+    const token = this.createSession(userName, 'node', nodeContext);
     return {
       ok: true,
       token,
@@ -180,6 +204,9 @@ export class KioskApiService {
     if (token) {
       this.sessions.delete(token);
     }
+
+    this.dashboardCache.clear();
+    this.connectedNodeContext = null;
 
     return { ok: true };
   }
@@ -234,6 +261,9 @@ export class KioskApiService {
     if (typeof body.loginPath === 'string' && body.loginPath.trim())
       this.connection.loginPath = body.loginPath.trim();
 
+    this.dashboardCache.clear();
+    this.connectedNodeContext = null;
+
     return this.getConnection(req);
   }
 
@@ -262,6 +292,11 @@ export class KioskApiService {
       this.connectionState.lastError = null;
       this.connectionState.lastCheckedAt = new Date().toISOString();
       this.connection.agentId = nodeLogin.node?.code || this.connection.agentId;
+      this.connectedNodeContext = {
+        id: String(nodeLogin.node?.id || ''),
+        name: String(nodeLogin.node?.name || ''),
+        code: String(nodeLogin.node?.code || ''),
+      };
       await this.maybeEmitHeartbeat(nodeLogin.node?.id, latestPrinters, true);
       return {
         ok: true,
@@ -280,74 +315,84 @@ export class KioskApiService {
   }
 
   async getDashboard(req: any) {
-    this.requireSession(this.getToken(req));
+    const session = this.requireSession(this.getToken(req));
 
-    const node = await this.resolveNodeContext();
+    const node = await this.resolveNodeContext(session);
     if (!node) {
       return this.emptyDashboard();
     }
 
-    const jobsLimit = Math.min(100, parseInt(req.query?.jobsLimit || '30', 10));
-    const jobsOffset = parseInt(req.query?.jobsOffset || '0', 10);
+    const rawJobsLimit = parseInt(req.query?.jobsLimit || '30', 10);
+    const rawJobsOffset = parseInt(req.query?.jobsOffset || '0', 10);
+    const jobsLimit = Math.min(100, Math.max(1, Number.isFinite(rawJobsLimit) ? rawJobsLimit : 30));
+    const jobsOffset = Math.max(0, Number.isFinite(rawJobsOffset) ? rawJobsOffset : 0);
 
-    const kiosk = await this.prisma.kiosk.findFirst({
-      where: { node_id: node.id },
-      orderBy: { updatedAt: 'desc' },
-    });
+    const dashboardCacheKey = `${node.id}:${jobsLimit}:${jobsOffset}`;
+    const cached = this.dashboardCache.get(dashboardCacheKey);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) {
+      return cached.value;
+    }
 
-    const queueJobs = await this.prisma.printJob.findMany({
-      where: { node_id: node.id, status: 'PAID' },
-      orderBy: { createdAt: 'asc' },
-      take: 20,
-    });
+    const [kiosk, queueJobs] = await Promise.all([
+      this.prisma.kiosk.findFirst({
+        where: { node_id: node.id },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      this.prisma.printJob.findMany({
+        where: { node_id: node.id, status: 'PAID' },
+        orderBy: { createdAt: 'asc' },
+        take: 20,
+      }),
+    ]);
 
-    const recentJobs = await this.prisma.printJob.findMany({
-      where: { node_id: node.id },
-      orderBy: { updatedAt: 'desc' },
-      take: jobsLimit,
-      skip: jobsOffset,
-    });
-
-    const totalJobs = await this.prisma.printJob.count({
-      where: { node_id: node.id },
-    });
-    const successfulJobs = await this.prisma.printJob.count({
-      where: { node_id: node.id, status: 'PRINTED' },
-    });
-    const failedJobs = await this.prisma.printJob.count({
-      where: { node_id: node.id, status: 'FAILED' },
-    });
-    const revenueAgg = await this.prisma.printJob.aggregate({
-      where: { node_id: node.id },
-      _sum: { payable_amount: true },
-    });
-    const pagesAgg = await this.prisma.printJob.aggregate({
-      where: { node_id: node.id },
-      _sum: { page_count: true },
-    });
-
-    const paidAgg = await this.prisma.payment.aggregate({
-      where: {
-        job: { node_id: node.id },
-        status: { in: ['PAID', 'SUCCESS', 'CAPTURED'] },
-      },
-      _sum: { amount: true },
-    });
+    const [recentJobs, statsRows, paidAgg] = await Promise.all([
+      this.prisma.printJob.findMany({
+        where: { node_id: node.id },
+        orderBy: { updatedAt: 'desc' },
+        take: jobsLimit,
+        skip: jobsOffset,
+      }),
+      this.prisma.$queryRaw<DashboardStatsRow[]>`
+        SELECT
+          COUNT(*)::bigint AS total_jobs,
+          COUNT(*) FILTER (WHERE status = 'PRINTED')::bigint AS successful_jobs,
+          COUNT(*) FILTER (WHERE status = 'FAILED')::bigint AS failed_jobs,
+          COALESCE(SUM(payable_amount), 0)::numeric AS total_revenue,
+          COALESCE(SUM(page_count), 0)::bigint AS total_pages
+        FROM "PrintJob"
+        WHERE node_id = ${node.id}
+      `,
+      this.prisma.payment.aggregate({
+        where: {
+          job: { node_id: node.id },
+          status: { in: ['PAID', 'SUCCESS', 'CAPTURED'] },
+        },
+        _sum: { amount: true },
+      }),
+    ]);
 
     // Removed auditLogs and notifications to reduce latency
     // as they are not currently displayed in the streamlined Kiosk UI
 
-    const heartbeatPrinters = Array.isArray(kiosk?.printer_list)
-      ? (kiosk.printer_list as unknown[])
-      : [];
-    await this.maybeEmitHeartbeat(node.id, heartbeatPrinters);
+    const stats = statsRows[0] || {
+      total_jobs: 0,
+      successful_jobs: 0,
+      failed_jobs: 0,
+      total_revenue: 0,
+      total_pages: 0,
+    };
 
-    const expectedRevenue = this.toNumber(revenueAgg._sum.payable_amount);
+    const totalJobs = Number(stats.total_jobs || 0);
+    const successfulJobs = Number(stats.successful_jobs || 0);
+    const failedJobs = Number(stats.failed_jobs || 0);
+    const expectedRevenue = this.toNumber(stats.total_revenue);
+    const totalPages = Number(stats.total_pages || 0);
     const paidRevenue = this.toNumber(paidAgg._sum.amount);
 
     const printerList = this.extractPrinters(kiosk?.printer_list);
 
-    return {
+    const dashboard = {
       kiosk: {
         name: kiosk?.location || node.name || this.connection.agentId,
         agentId: this.connection.agentId || node.code,
@@ -362,7 +407,7 @@ export class KioskApiService {
         successfulJobs,
         failedJobs,
         totalRevenue: expectedRevenue,
-        totalPages: Math.max(0, Number(pagesAgg._sum.page_count || 0)),
+        totalPages: Math.max(0, totalPages),
       },
       queue: {
         jobs: queueJobs.map((job) => ({
@@ -422,11 +467,18 @@ export class KioskApiService {
       notifications: [],
       auditLogs: [],
     };
+
+    this.dashboardCache.set(dashboardCacheKey, {
+      value: dashboard,
+      expiresAt: now + this.dashboardCacheTtlMs,
+    });
+
+    return dashboard;
   }
 
   async getLogs(req: any) {
-    this.requireSession(this.getToken(req));
-    const node = await this.resolveNodeContext();
+    const session = this.requireSession(this.getToken(req));
+    const node = await this.resolveNodeContext(session);
 
     if (!node) {
       return { logs: [] };
@@ -521,41 +573,31 @@ export class KioskApiService {
     });
   }
 
-  private async resolveNodeContext(): Promise<NodeContext | null> {
-    if (!this.connection.nodeEmail || !this.connection.nodePassword) {
-      return null;
+  private async resolveNodeContext(
+    session?: SessionRecord,
+  ): Promise<NodeContext | null> {
+    if (session?.mode === 'node' && session.node?.id) {
+      return session.node;
     }
 
-    try {
-      const nodeLogin = await this.nodeService.login(
-        this.connection.nodeEmail,
-        this.connection.nodePassword,
-      );
-      this.connectionState.connected = true;
-      this.connectionState.lastError = null;
-      this.connectionState.lastCheckedAt = new Date().toISOString();
-      return {
-        id: String(nodeLogin.node?.id || ''),
-        name: String(nodeLogin.node?.name || ''),
-        code: String(nodeLogin.node?.code || ''),
-      };
-    } catch (error) {
-      this.connectionState.connected = false;
-      this.connectionState.lastError =
-        error instanceof Error
-          ? error.message
-          : 'Unable to resolve node context';
-      this.connectionState.lastCheckedAt = new Date().toISOString();
-      return null;
+    if (this.connectedNodeContext?.id) {
+      return this.connectedNodeContext;
     }
+
+    return null;
   }
 
-  private createSession(userName: string, mode: 'local' | 'node') {
+  private createSession(
+    userName: string,
+    mode: 'local' | 'node',
+    node?: NodeContext,
+  ) {
     const token = randomUUID();
     this.sessions.set(token, {
       userName,
       mode,
       expiresAt: Date.now() + this.dashboardSessionTtlMs,
+      node,
     });
     return token;
   }
