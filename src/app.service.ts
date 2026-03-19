@@ -8,6 +8,8 @@ export class AppService {
     const mins = Math.floor((uptime % 3600) / 60);
     const secs = Math.floor(uptime % 60);
 
+    const version = process.env.RENDER_GIT_COMMIT ? process.env.RENDER_GIT_COMMIT.substring(0, 7) : process.env.npm_package_version || '1.0.0';
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -163,8 +165,8 @@ export class AppService {
     <div class="printer-anim"><span>▸ receiving document... parsing pages... sending to node...</span></div>
     <div class="status">
       <div class="status-item"><div class="dot"></div> API Online</div>
-      <div class="status-item"><div class="dot dot-amber"></div> Uptime: ${hours}h ${mins}m ${secs}s</div>
-      <div class="status-item"><div class="dot"></div> v1.0.0</div>
+      <div class="status-item"><div class="dot dot-amber"></div> Uptime: \${hours}h \${mins}m \${secs}s</div>
+      <div class="status-item"><div class="dot"></div> v\${version}</div>
     </div>
     <div class="links">
       <a href="/api">📄 Swagger Docs</a>
