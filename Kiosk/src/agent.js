@@ -202,8 +202,8 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 function normalizeJob(rawJob = {}) {
-  const id = rawJob.id || rawJob.jobId || `job-${Date.now()}-${Math.round(Math.random() * 1000)}`;
-  const pages = Number(rawJob.pages || 1);
+  const id = rawJob.id || rawJob.jobId || rawJob.job_id || `job-${Date.now()}-${Math.round(Math.random() * 1000)}`;
+  const pages = Number(rawJob.pages || rawJob.page_count || 1);
   const copies = Number(rawJob.copies || 1);
   const safeCopies = Number.isFinite(copies) && copies > 0 ? copies : 1;
   const normalizedFileUrls = Array.isArray(rawJob.fileUrls)
@@ -234,7 +234,7 @@ function normalizeJob(rawJob = {}) {
       return null;
     })
     .filter((entry) => Boolean(entry));
-  const primaryFileUrl = rawJob.fileUrl || fileEntries[0]?.url || null;
+  const primaryFileUrl = rawJob.fileUrl || rawJob.file_url || fileEntries[0]?.url || null;
   const finalFileEntries = fileEntries.length > 0 ? fileEntries : (primaryFileUrl ? [{ url: primaryFileUrl, copies: safeCopies }] : []);
 
   return {
@@ -244,13 +244,25 @@ function normalizeJob(rawJob = {}) {
     fileUrl: primaryFileUrl,
     fileUrls: finalFileEntries,
     fileEntries: finalFileEntries,
-    userName: rawJob.userName || 'unknown-user',
-    documentName: rawJob.documentName || rawJob.fileName || 'document.pdf',
+    userName: rawJob.userName || rawJob.user_name || 'unknown-user',
+    documentName: rawJob.documentName || rawJob.document_name || rawJob.fileName || 'document.pdf',
     pages: Number.isFinite(pages) && pages > 0 ? pages : 1,
     copies: safeCopies,
-    color: Boolean(rawJob.color),
+    color: rawJob.color_mode ? String(rawJob.color_mode).toUpperCase() === 'COLOR' : Boolean(rawJob.color),
     paperSize: rawJob.paperSize || 'A4'
   };
+}
+
+async function safeReportJobUpdate(jobId, status, details = {}) {
+  try {
+    await serverApi.reportJobUpdate(jobId, status, details);
+  } catch (error) {
+    addLog('warn', 'Failed to report job update to backend', {
+      jobId,
+      status,
+      error: error.message
+    });
+  }
 }
 
 function fingerprintForJob(job) {
@@ -485,7 +497,7 @@ async function executePrintAttempt(job, attempt) {
     throw new Error('No file URLs available for this job');
   }
 
-  await serverApi.reportJobUpdate(job.id, 'RECEIVED', { printerName, attempt });
+  await safeReportJobUpdate(job.id, 'RECEIVED', { printerName, attempt });
 
   const startedAtMs = Date.now();
 
@@ -538,7 +550,7 @@ async function executePrintAttempt(job, attempt) {
 
     addLog('info', 'Print completed', { jobId: job.id, printerName, attempt });
     addAudit('JOB_PRINTED', 'system', { jobId: job.id, printerName, attempt });
-    await serverApi.reportJobUpdate(job.id, 'PRINTED', {
+    await safeReportJobUpdate(job.id, 'PRINTED', {
       printerName,
       attempt,
       latencyMs,
@@ -580,7 +592,7 @@ async function processJobWithRetry(job) {
     } catch (error) {
       lastError = error;
       if (attempt < maxAttempts) {
-        await serverApi.reportJobUpdate(job.id, 'RETRYING', { attempt, error: error.message });
+        await safeReportJobUpdate(job.id, 'RETRYING', { attempt, error: error.message });
       }
     }
   }
@@ -598,7 +610,7 @@ async function processJobWithRetry(job) {
 
   addNotification('PRINT_FAILED', `Job ${job.id} failed: ${diagnostic}`, 'error', { jobId: job.id });
   addAudit('JOB_FAILED', 'system', { jobId: job.id, diagnostic });
-  await serverApi.reportJobUpdate(job.id, 'FAILED', {
+  await safeReportJobUpdate(job.id, 'FAILED', {
     diagnostic,
     error: lastError?.message || 'Unknown error'
   });
