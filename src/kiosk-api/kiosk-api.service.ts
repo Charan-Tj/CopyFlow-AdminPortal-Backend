@@ -292,19 +292,34 @@ export class KioskApiService {
         jobs: queueJobs.map((job) => ({
           id: job.job_id,
           jobId: job.job_id,
-          userName: job.user_name || 'Unknown',
-          documentName: job.document_name || 'Document',
+          userName: job.user_name || job.phone_number || 'Unknown',
+          documentName: job.document_name || this.extractDocumentName(job.file_urls) || 'Document',
           copies: job.copies,
+          pages: job.page_count,
+          sides: job.sides,
+          color: job.color_mode === 'COLOR',
+          amount: this.toNumber(job.payable_amount),
+          status: job.status,
+          printerName: job.assigned_printer || this.connection.defaultPrinterName || 'Auto',
+          createdAt: job.createdAt.toISOString(),
+          phoneNumber: job.phone_number || null,
         })),
       },
       printers: printerList,
       jobs: recentJobs.map((job) => ({
         jobId: job.job_id,
-        userName: job.user_name || 'Unknown',
-        owner: job.user_name || 'Unknown',
-        documentName: job.document_name || 'Document',
+        userName: job.user_name || job.phone_number || 'Unknown',
+        owner: job.user_name || job.phone_number || 'Unknown',
+        documentName: job.document_name || this.extractDocumentName(job.file_urls) || 'Document',
         status: job.status,
         printerName: job.assigned_printer || this.connection.defaultPrinterName || 'Auto',
+        pages: job.page_count,
+        copies: job.copies,
+        sides: job.sides,
+        color: job.color_mode === 'COLOR',
+        amount: this.toNumber(job.payable_amount),
+        createdAt: job.createdAt.toISOString(),
+        updatedAt: job.updatedAt.toISOString(),
       })),
       sla: {},
       diagnostics: {},
@@ -486,6 +501,24 @@ export class KioskApiService {
     });
 
     return Array.isArray(kiosk?.printer_list) ? (kiosk.printer_list as unknown[]) : [];
+  }
+
+  private extractDocumentName(fileUrls: unknown): string | null {
+    const list = Array.isArray(fileUrls) ? fileUrls : [];
+    if (list.length === 0) {
+      return null;
+    }
+
+    const first = list[0] as any;
+    const rawUrl = typeof first === 'string' ? first : String(first?.url || '').trim();
+    if (!rawUrl) {
+      return null;
+    }
+
+    const sanitized = rawUrl.split('?')[0].trim();
+    const chunks = sanitized.split('/').filter(Boolean);
+    const filename = chunks[chunks.length - 1];
+    return filename || null;
   }
 
   private evaluatePrinterReadiness(printers: unknown[]) {

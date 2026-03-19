@@ -207,7 +207,7 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         }
     }
 
-    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any }> {
+    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any; userName?: string }> {
         try {
             if (!body.ctx) return { sender: '', message: '' };
             const ctx: Context = body.ctx;
@@ -216,6 +216,11 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
             if (!chatId) return { sender: '', message: '' };
 
             const sender = `telegram:${chatId}`;
+            const firstName = String((ctx.from as any)?.first_name || '').trim();
+            const lastName = String((ctx.from as any)?.last_name || '').trim();
+            const usernameHandle = String((ctx.from as any)?.username || '').trim();
+            const displayFromNames = `${firstName}${lastName ? ` ${lastName}` : ''}`.trim();
+            const userName = displayFromNames || (usernameHandle ? `@${usernameHandle}` : undefined);
             let message = '';
             let mediaUrl = undefined;
             let mediaContentType = undefined;
@@ -238,7 +243,7 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 message = cbQuery.data || '';
             }
 
-            return { sender, message, mediaUrl, mediaContentType, interactiveData };
+            return { sender, message, mediaUrl, mediaContentType, interactiveData, userName };
         } catch (error) {
             this.logger.error('Failed to parse Telegram format', error);
             return { sender: '', message: '' };

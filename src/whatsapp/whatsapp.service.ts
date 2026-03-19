@@ -33,6 +33,7 @@ interface ChatState {
     cashfreeLink?: string;
     jobId?: string;
     sender?: string;
+    userName?: string;
     platform?: 'telegram' | 'meta' | 'twilio';
     useFlow?: boolean;
     startedAt?: number;
@@ -232,13 +233,16 @@ export class WhatsappService {
         }
     }
 
-    async handleIncomingMessage(sender: string, message: string, mediaUrl?: string, mediaContentType?: string, interactiveData?: any): Promise<string | null> {
+    async handleIncomingMessage(sender: string, message: string, mediaUrl?: string, mediaContentType?: string, interactiveData?: any, userName?: string): Promise<string | null> {
         this.logger.log(`Received message from ${sender}: ${message}`);
 
         let session = await this.loadSession(sender);
 
         if (!session) {
-            session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
+            session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined };
+            await this.saveSession(sender, session);
+        } else if (String(userName || '').trim() && !session.userName) {
+            session.userName = String(userName || '').trim();
             await this.saveSession(sender, session);
         }
 
@@ -272,7 +276,7 @@ export class WhatsappService {
             // ─── Global cancel/reset: works at ANY step ───────────────
             if (normalizedMessage === 'cancel' || normalizedMessage === 'reset' || normalizedMessage === 'restart' || normalizedMessage === '/cancel' || normalizedMessage === '/reset' || normalizedMessage === '/start') {
                 await this.deleteSession(sender);
-                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
+                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined };
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
                 await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.\n\nTo select a shop, type: shop <shop_code>');
@@ -351,6 +355,7 @@ export class WhatsappService {
                 const preservedNodeId = session.nodeId;
                 const preservedNodeCode = session.nodeCode;
                 const preservedPlatform = session.platform;
+                const preservedUserName = session.userName;
 
                 session = {
                     step: 'AWAITING_FILE',
@@ -359,6 +364,7 @@ export class WhatsappService {
                     nodeId: preservedNodeId,
                     nodeCode: preservedNodeCode,
                     platform: preservedPlatform,
+                    userName: preservedUserName,
                 };
                 await this.saveSession(sender, session);
 
