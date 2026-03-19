@@ -38,6 +38,8 @@ export class KioskApiService {
   private readonly dashboardPassword = process.env.KIOSK_DASHBOARD_PASSWORD || 'admin123';
   private readonly dashboardSessionTtlMs = Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000);
   private readonly sessions = new Map<string, SessionRecord>();
+  private readonly heartbeatIntervalMs = Number(process.env.KIOSK_BRIDGE_HEARTBEAT_MS || 15000);
+  private readonly lastHeartbeatByNodeId = new Map<string, number>();
 
   private readonly connection: ConnectionConfig = {
     serverUrl: process.env.KIOSK_DEFAULT_SERVER_URL || process.env.SERVER_URL || '',
@@ -96,6 +98,7 @@ export class KioskApiService {
     this.connectionState.connected = true;
     this.connectionState.lastError = null;
     this.connectionState.lastCheckedAt = new Date().toISOString();
+    await this.maybeEmitHeartbeat(nodeLogin.node?.id, []);
 
     const token = this.createSession(userName, 'node');
     return {
@@ -192,6 +195,7 @@ export class KioskApiService {
       this.connectionState.lastError = null;
       this.connectionState.lastCheckedAt = new Date().toISOString();
       this.connection.agentId = nodeLogin.node?.code || this.connection.agentId;
+      await this.maybeEmitHeartbeat(nodeLogin.node?.id, [], true);
       return {
         ok: true,
         node: nodeLogin.node,
@@ -214,6 +218,8 @@ export class KioskApiService {
     if (!node) {
       return this.emptyDashboard();
     }
+
+    await this.maybeEmitHeartbeat(node.id, []);
 
     const [kiosk, queueJobs, recentJobs, totalJobs, successfulJobs, failedJobs, revenueAgg, pagesAgg, paidAgg, auditLogs, notifications] = await Promise.all([
       this.prisma.kiosk.findFirst({
@@ -459,5 +465,31 @@ export class KioskApiService {
 
     const num = Number(value);
     return Number.isFinite(num) ? Number(num.toFixed(2)) : 0;
+  }
+
+  private async maybeEmitHeartbeat(nodeId: unknown, printers: unknown[], force = false) {
+    const id = String(nodeId || '').trim();
+    if (!id) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastSent = this.lastHeartbeatByNodeId.get(id) || 0;
+    if (!force && now - lastSent < this.heartbeatIntervalMs) {
+      return;
+    }
+
+    const printerList = Array.isArray(printers) ? printers : [];
+    try {
+      await this.nodeService.updateHeartbeat(id, 'HIGH', printerList);
+      this.lastHeartbeatByNodeId.set(id, now);
+      this.connectionState.connected = true;
+      this.connectionState.lastError = null;
+      this.connectionState.lastCheckedAt = new Date(now).toISOString();
+    } catch (error) {
+      this.connectionState.connected = false;
+      this.connectionState.lastError = error instanceof Error ? error.message : 'Heartbeat failed';
+      this.connectionState.lastCheckedAt = new Date(now).toISOString();
+    }
   }
 }
