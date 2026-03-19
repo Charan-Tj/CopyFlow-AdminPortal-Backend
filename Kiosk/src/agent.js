@@ -399,13 +399,33 @@ function computeReconciliation() {
   };
 }
 
-function dashboardSnapshot() {
+function parsePositiveInt(value, fallback, max) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  if (typeof max === 'number') {
+    return Math.min(parsed, max);
+  }
+
+  return parsed;
+}
+
+function dashboardSnapshot(options = {}) {
+  const jobsLimit = parsePositiveInt(options.jobsLimit, 10, 100);
+  const jobsOffset = parsePositiveInt(options.jobsOffset, 0);
   const connection = serverApi.getConfig();
   const kioskName =
     String(process.env.KIOSK_NAME || '').trim() ||
     connection.nodeName ||
     connection.agentId ||
     'Local Kiosk';
+
+  const completedStatuses = new Set(['PRINTED', 'COMPLETED', 'FAILED', 'CANCELLED']);
+  const previousJobs = state.jobs.filter((job) => completedStatuses.has(String(job.status || '').toUpperCase()));
+  const pagedJobs = previousJobs.slice(jobsOffset, jobsOffset + jobsLimit);
+  const jobsNextOffset = jobsOffset + pagedJobs.length;
 
   return {
     kiosk: {
@@ -422,7 +442,7 @@ function dashboardSnapshot() {
     },
     queue: {
       count: state.queue.length,
-      jobs: state.queue.slice(0, 100)
+      jobs: state.queue
     },
     metrics: {
       totalJobs: state.metrics.totalJobs,
@@ -435,9 +455,15 @@ function dashboardSnapshot() {
     reconciliation: computeReconciliation(),
     diagnostics: computeDiagnostics(),
     printers: enrichPrinters(),
-    jobs: state.jobs.slice(0, 200),
+    jobs: pagedJobs,
+    jobsPage: {
+      offset: jobsOffset,
+      limit: jobsLimit,
+      total: previousJobs.length,
+      hasMore: jobsNextOffset < previousJobs.length,
+      nextOffset: jobsNextOffset
+    },
     notifications: state.notifications.slice(0, 100),
-    auditLogs: state.auditLogs.slice(0, 100)
   };
 }
 
@@ -692,8 +718,10 @@ app.post('/api/connection/test', async (_req, res) => {
   return res.json(result);
 });
 
-app.get('/api/dashboard', (_req, res) => {
-  res.json(dashboardSnapshot());
+app.get('/api/dashboard', (req, res) => {
+  const jobsLimit = parsePositiveInt(req.query?.jobsLimit, 10, 100);
+  const jobsOffset = parsePositiveInt(req.query?.jobsOffset, 0);
+  res.json(dashboardSnapshot({ jobsLimit, jobsOffset }));
 });
 
 app.get('/api/printers', async (_req, res) => {
@@ -739,8 +767,22 @@ app.delete('/api/queue/:jobId', (req, res) => {
   return res.json({ ok: true });
 });
 
-app.get('/api/logs', (_req, res) => {
-  res.json({ logs: state.logs });
+app.get('/api/logs', (req, res) => {
+  const limit = parsePositiveInt(req.query?.limit, 10, 100);
+  const offset = parsePositiveInt(req.query?.offset, 0);
+  const logs = state.logs.slice(offset, offset + limit);
+  const nextOffset = offset + logs.length;
+
+  res.json({
+    logs,
+    page: {
+      offset,
+      limit,
+      total: state.logs.length,
+      hasMore: nextOffset < state.logs.length,
+      nextOffset
+    }
+  });
 });
 
 app.get('/api/audit', (_req, res) => {

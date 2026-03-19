@@ -66,6 +66,28 @@ export class KioskApiService {
     private readonly prisma: PrismaService,
   ) {}
 
+  private inferSenderSource(phoneNumber: string | null | undefined): 'WhatsApp' | 'Telegram' | 'Website' | 'Unknown' {
+    const raw = String(phoneNumber || '').trim().toLowerCase();
+
+    if (!raw) {
+      return 'Website';
+    }
+
+    if (raw.startsWith('whatsapp:') || raw.startsWith('wa:') || raw.startsWith('+')) {
+      return 'WhatsApp';
+    }
+
+    if (raw.startsWith('telegram:') || /^\d{8,}$/.test(raw)) {
+      return 'Telegram';
+    }
+
+    if (raw.startsWith('web:') || raw.startsWith('site:') || raw.startsWith('portal:')) {
+      return 'Website';
+    }
+
+    return 'Unknown';
+  }
+
   health() {
     return {
       ok: true,
@@ -293,6 +315,8 @@ export class KioskApiService {
           id: job.job_id,
           jobId: job.job_id,
           userName: job.user_name || job.phone_number || 'Unknown',
+          sender: job.phone_number || null,
+          source: this.inferSenderSource(job.phone_number),
           documentName: job.document_name || this.extractDocumentName(job.file_urls) || 'Document',
           copies: job.copies,
           pages: job.page_count,
@@ -310,6 +334,9 @@ export class KioskApiService {
         jobId: job.job_id,
         userName: job.user_name || job.phone_number || 'Unknown',
         owner: job.user_name || job.phone_number || 'Unknown',
+        sender: job.phone_number || null,
+        source: this.inferSenderSource(job.phone_number),
+        phoneNumber: job.phone_number || null,
         documentName: job.document_name || this.extractDocumentName(job.file_urls) || 'Document',
         status: job.status,
         printerName: job.assigned_printer || this.connection.defaultPrinterName || 'Auto',
