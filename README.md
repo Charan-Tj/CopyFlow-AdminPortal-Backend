@@ -1,68 +1,85 @@
-# backend-engine
+# CopyFlow Backend Engine 🖨️🚀
 
-[![Nest Logo](https://nestjs.com/img/logo-small.svg)](http://nestjs.com/)
+The core backend infrastructure powering **CopyFlow** — a distributed cloud print network. This NestJS-based API handles file uploads, payment processing, WhatsApp bot interactions, and real-time WebSocket communication with edge printing kiosks (Nodes).
 
-A progressive [Node.js](http://nodejs.org) framework for building efficient and scalable server-side applications.
+## 🌟 Key Features
 
-[![NPM Version](https://img.shields.io/npm/v/@nestjs/core.svg)](https://www.npmjs.com/~nestjscore)[![Package License](https://img.shields.io/npm/l/@nestjs/core.svg)](https://www.npmjs.com/~nestjscore)[![NPM Downloads](https://img.shields.io/npm/dm/@nestjs/common.svg)](https://www.npmjs.com/~nestjscore)[![CircleCI](https://img.shields.io/circleci/build/github/nestjs/nest/master)](https://circleci.com/gh/nestjs/nest)[![Discord](https://img.shields.io/badge/discord-online-brightgreen.svg)](https://discord.gg/G7Qnnhy)[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)[![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor) [![Donate us](https://img.shields.io/badge/Donate-PayPal-ff3f59.svg)](https://paypal.me/kamilmysliwiec) [![Support us](https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg)](https://opencollective.com/nest#sponsor) [![Follow us on Twitter](https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow)](https://twitter.com/nestframework)
+* **Multi-Channel Chatbots:** Native integration with WhatsApp (via Twilio/Meta) and Telegram bots for users to seamlessly upload documents and configure print jobs.
+* **Real-time Node Communication:** WebSocket namespace (`/node`) utilizing Socket.IO for pushing instant print jobs to distributed Windows Kiosk clients.
+* **Payment Integration:** Secure checkout and webhook verification via Razorpay for per-page printing costs.
+* **Document Processing:** Automated page counting and format validation (PDF, DOCX, Images) before spooling.
+* **Admin Portal API:** Secure endpoints for managing print nodes, transaction history, and pricing configurations.
+* **Cloud Storage:** Supabase integration for temporary document storage using signed URLs.
 
-## Description
+## 🏗️ Architecture
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+The backend is built with **NestJS** and uses **Prisma** + **PostgreSQL** for the database.
+- **`src/whatsapp`**: Webhook endpoints and service logic for Meta, Twilio, and Telegram providers.
+- **`src/payment`**: Razorpay checkout generation and webhook verification.
+- **`src/node`**: Node operator authentication, REST polling paths, and Socket.IO gateway (`node.gateway.ts`).
+- **`src/print`**: Job status tracking, routing, and final acknowledgment processing.
+- **`src/admin`**: JWT-secured endpoints consumed by the Next.js Admin Portal.
 
-## Project setup
+## 🚀 Getting Started
 
-```bash
-$ 
-```
+### Prerequisites
+- Node.js (v18+ recommended)
+- PostgreSQL database
+- Supabase account (for file storage)
+- Razorpay account (for payments)
+- Twilio/Meta/Telegram tokens (for bot interactions)
 
-## Compile and run the project
-
-```bash
-# development$ npm run start# watch mode$ npm run start:dev# production mode$ npm run start:prod
-```
-
-## Run tests
-
-```bash
-# unit tests$ npm run test# e2e tests$ npm run test:e2e# test coverage$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+### Installation
 
 ```bash
-$ npm install -g @nestjs/mau$ mau deploy
+$ npm install
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+### Environment Variables
 
-## Resources
+Create a `.env` file in the root directory. See `.env.example` (or configure via your deployment platform):
+```env
+# Database
+DATABASE_URL="postgresql://user:pass@host:5432/copyflow"
 
-Check out a few resources that may come in handy when working with NestJS:
+# Authentication
+JWT_SECRET="your_jwt_secret"
+NODE_JWT_SECRET="your_node_jwt_secret"
 
--   Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
--   For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
--   To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
--   Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
--   Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
--   Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
--   To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
--   Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+# Cloud & Third-Party
+SUPABASE_URL="..."
+SUPABASE_KEY="..."
+RAZORPAY_KEY_ID="..."
+RAZORPAY_KEY_SECRET="..."
 
-## Support
+# Bot Tokens
+TELEGRAM_BOT_TOKEN="..."
+META_PHONE_NUMBER_ID="..."
+# ... (see codebase for full list)
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### Running the App
 
-## Stay in touch
+```bash
+# Generate Prisma Client
+$ npx prisma generate
 
--   Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
--   Website - [https://nestjs.com](https://nestjs.com/)
--   Twitter - [@nestframework](https://twitter.com/nestframework)
+# Development mode
+$ npm run start:dev
 
-## License
+# Production mode
+$ npm run build
+$ npm run start:prod
+```
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## 📚 API Documentation
+
+Once the server is running, you can access the interactive Swagger documentation at:
+**`http://localhost:3000/api`**
+
+## 📟 Kiosk Client (Node)
+
+The actual printing is done by edge clients (Kiosks). The latest client is an **Electron-based Windows app** located in the `Kiosk/` directory, which connects to this backend via WebSocket.
+
+## 📄 License & Ownership
+Proprietary software. Created for the CopyFlow Print Network.
