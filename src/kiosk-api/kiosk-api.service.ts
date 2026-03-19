@@ -39,7 +39,10 @@ export class KioskApiService {
   private readonly dashboardSessionTtlMs = Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000);
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly heartbeatIntervalMs = Number(process.env.KIOSK_BRIDGE_HEARTBEAT_MS || 15000);
+  private readonly heartbeatAuthTtlSeconds = Number(process.env.KIOSK_BRIDGE_TOKEN_TTL_SECONDS || 1800);
+  private readonly readinessMinInkPercent = Number(process.env.KIOSK_BRIDGE_MIN_INK_LEVEL || process.env.MIN_INK_LEVEL || 10);
   private readonly lastHeartbeatByNodeId = new Map<string, number>();
+  private readonly heartbeatSequenceByNodeId = new Map<string, number>();
 
   private readonly connection: ConnectionConfig = {
     serverUrl: process.env.KIOSK_DEFAULT_SERVER_URL || process.env.SERVER_URL || '',
@@ -92,13 +95,14 @@ export class KioskApiService {
     }
 
     const nodeLogin = await this.nodeService.login(userName, password);
+    const latestPrinters = await this.getLatestPrinterList(String(nodeLogin.node?.id || ''));
     this.connection.nodeEmail = userName;
     this.connection.nodePassword = password;
     this.connection.agentId = nodeLogin.node?.code || this.connection.agentId;
     this.connectionState.connected = true;
     this.connectionState.lastError = null;
     this.connectionState.lastCheckedAt = new Date().toISOString();
-    await this.maybeEmitHeartbeat(nodeLogin.node?.id, []);
+    await this.maybeEmitHeartbeat(nodeLogin.node?.id, latestPrinters);
 
     const token = this.createSession(userName, 'node');
     return {
@@ -191,11 +195,12 @@ export class KioskApiService {
 
     try {
       const nodeLogin = await this.nodeService.login(this.connection.nodeEmail, this.connection.nodePassword);
+      const latestPrinters = await this.getLatestPrinterList(String(nodeLogin.node?.id || ''));
       this.connectionState.connected = true;
       this.connectionState.lastError = null;
       this.connectionState.lastCheckedAt = new Date().toISOString();
       this.connection.agentId = nodeLogin.node?.code || this.connection.agentId;
-      await this.maybeEmitHeartbeat(nodeLogin.node?.id, [], true);
+      await this.maybeEmitHeartbeat(nodeLogin.node?.id, latestPrinters, true);
       return {
         ok: true,
         node: nodeLogin.node,
@@ -218,8 +223,6 @@ export class KioskApiService {
     if (!node) {
       return this.emptyDashboard();
     }
-
-    await this.maybeEmitHeartbeat(node.id, []);
 
     const [kiosk, queueJobs, recentJobs, totalJobs, successfulJobs, failedJobs, revenueAgg, pagesAgg, paidAgg, auditLogs, notifications] = await Promise.all([
       this.prisma.kiosk.findFirst({
@@ -259,6 +262,9 @@ export class KioskApiService {
         take: 20,
       }),
     ]);
+
+    const heartbeatPrinters = Array.isArray(kiosk?.printer_list) ? (kiosk.printer_list as unknown[]) : [];
+    await this.maybeEmitHeartbeat(node.id, heartbeatPrinters);
 
     const expectedRevenue = this.toNumber(revenueAgg._sum.payable_amount);
     const paidRevenue = this.toNumber(paidAgg._sum.amount);
@@ -467,6 +473,77 @@ export class KioskApiService {
     return Number.isFinite(num) ? Number(num.toFixed(2)) : 0;
   }
 
+  private async getLatestPrinterList(nodeId: string): Promise<unknown[]> {
+    const id = String(nodeId || '').trim();
+    if (!id) {
+      return [];
+    }
+
+    const kiosk = await this.prisma.kiosk.findFirst({
+      where: { node_id: id },
+      orderBy: { updatedAt: 'desc' },
+      select: { printer_list: true },
+    });
+
+    return Array.isArray(kiosk?.printer_list) ? (kiosk.printer_list as unknown[]) : [];
+  }
+
+  private evaluatePrinterReadiness(printers: unknown[]) {
+    const list = Array.isArray(printers) ? printers : [];
+    let hasOnlinePrinter = false;
+    let minInk: number | null = null;
+
+    for (const item of list) {
+      const printer = item as any;
+      const onlineFlag = printer?.online ?? printer?.is_online;
+      const statusText = String(printer?.printerStatus || printer?.status || '').toUpperCase();
+      const online = typeof onlineFlag === 'boolean' ? onlineFlag : statusText.includes('ONLINE');
+      if (online) {
+        hasOnlinePrinter = true;
+      }
+
+      const inkSamples: number[] = [];
+      const directInkFields = [
+        printer?.ink_level,
+        printer?.inkLevel,
+        printer?.ink_level_black,
+        printer?.ink_level_cyan,
+        printer?.ink_level_magenta,
+        printer?.ink_level_yellow,
+        printer?.toner_level,
+      ];
+
+      for (const raw of directInkFields) {
+        const value = Number(raw);
+        if (Number.isFinite(value)) {
+          inkSamples.push(value);
+        }
+      }
+
+      const consumables = Array.isArray(printer?.consumables) ? printer.consumables : [];
+      for (const consumable of consumables) {
+        const percent = Number(consumable?.percent);
+        if (Number.isFinite(percent)) {
+          inkSamples.push(percent);
+        }
+      }
+
+      if (inkSamples.length > 0) {
+        const printerMinInk = Math.min(...inkSamples);
+        if (minInk === null || printerMinInk < minInk) {
+          minInk = printerMinInk;
+        }
+      }
+    }
+
+    const lowInk = minInk !== null && minInk <= this.readinessMinInkPercent;
+    return {
+      hasOnlinePrinter,
+      minInk,
+      lowInk,
+    };
+  }
+
   private async maybeEmitHeartbeat(nodeId: unknown, printers: unknown[], force = false) {
     const id = String(nodeId || '').trim();
     if (!id) {
@@ -480,8 +557,49 @@ export class KioskApiService {
     }
 
     const printerList = Array.isArray(printers) ? printers : [];
+    const timestampIso = new Date(now).toISOString();
+    const sequenceNumber = (this.heartbeatSequenceByNodeId.get(id) || 0) + 1;
+    this.heartbeatSequenceByNodeId.set(id, sequenceNumber);
+
+    const printerReadiness = this.evaluatePrinterReadiness(printerList);
+
+    const reasonsIfNotReady: string[] = [];
+    if (!this.connectionState.connected) {
+      reasonsIfNotReady.push(this.connectionState.lastError || 'not_connected');
+    }
+    if (!printerReadiness.hasOnlinePrinter) {
+      reasonsIfNotReady.push('no_online_printer');
+    }
+    if (printerReadiness.lowInk) {
+      reasonsIfNotReady.push('low_ink');
+    }
+    const ready = reasonsIfNotReady.length === 0;
+
+    const heartbeatPayload = {
+      type: 'HEARTBEAT',
+      agentId: this.connection.agentId || 'kiosk-cloud',
+      nodeId: id,
+      timestamp: timestampIso,
+      sequenceNumber,
+      eventId: randomUUID(),
+      liveness: {
+        signal: true,
+        uptime_seconds: Math.max(0, Math.floor(process.uptime())),
+      },
+      readiness: {
+        ready,
+        reasons_if_not_ready: reasonsIfNotReady,
+      },
+      auth: {
+        authenticated: Boolean(this.connection.nodeEmail && this.connection.nodePassword),
+        token_expires_in: this.heartbeatAuthTtlSeconds,
+      },
+    };
+
     try {
-      await this.nodeService.updateHeartbeat(id, 'HIGH', printerList);
+      const paperLevel = printerReadiness.lowInk ? 'LOW' : 'HIGH';
+      await this.nodeService.updateHeartbeat(id, paperLevel, printerList);
+      await this.nodeService.ingestAgentEvent(id, 'HEARTBEAT', heartbeatPayload, timestampIso);
       this.lastHeartbeatByNodeId.set(id, now);
       this.connectionState.connected = true;
       this.connectionState.lastError = null;
