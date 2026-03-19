@@ -35,17 +35,27 @@ type NodeContext = {
 @Injectable()
 export class KioskApiService {
   private readonly dashboardUser = process.env.KIOSK_DASHBOARD_USER || 'admin';
-  private readonly dashboardPassword = process.env.KIOSK_DASHBOARD_PASSWORD || 'admin123';
-  private readonly dashboardSessionTtlMs = Number(process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000);
+  private readonly dashboardPassword =
+    process.env.KIOSK_DASHBOARD_PASSWORD || 'admin123';
+  private readonly dashboardSessionTtlMs = Number(
+    process.env.DASHBOARD_SESSION_TTL_MS || 8 * 60 * 60 * 1000,
+  );
   private readonly sessions = new Map<string, SessionRecord>();
-  private readonly heartbeatIntervalMs = Number(process.env.KIOSK_BRIDGE_HEARTBEAT_MS || 15000);
-  private readonly heartbeatAuthTtlSeconds = Number(process.env.KIOSK_BRIDGE_TOKEN_TTL_SECONDS || 1800);
-  private readonly readinessMinInkPercent = Number(process.env.KIOSK_BRIDGE_MIN_INK_LEVEL || process.env.MIN_INK_LEVEL || 10);
+  private readonly heartbeatIntervalMs = Number(
+    process.env.KIOSK_BRIDGE_HEARTBEAT_MS || 15000,
+  );
+  private readonly heartbeatAuthTtlSeconds = Number(
+    process.env.KIOSK_BRIDGE_TOKEN_TTL_SECONDS || 1800,
+  );
+  private readonly readinessMinInkPercent = Number(
+    process.env.KIOSK_BRIDGE_MIN_INK_LEVEL || process.env.MIN_INK_LEVEL || 10,
+  );
   private readonly lastHeartbeatByNodeId = new Map<string, number>();
   private readonly heartbeatSequenceByNodeId = new Map<string, number>();
 
   private readonly connection: ConnectionConfig = {
-    serverUrl: process.env.KIOSK_DEFAULT_SERVER_URL || process.env.SERVER_URL || '',
+    serverUrl:
+      process.env.KIOSK_DEFAULT_SERVER_URL || process.env.SERVER_URL || '',
     agentId: process.env.KIOSK_AGENT_ID || 'kiosk-cloud',
     nodeEmail: process.env.KIOSK_NODE_EMAIL || '',
     nodePassword: process.env.KIOSK_NODE_PASSWORD || '',
@@ -66,14 +76,22 @@ export class KioskApiService {
     private readonly prisma: PrismaService,
   ) {}
 
-  private inferSenderSource(phoneNumber: string | null | undefined): 'WhatsApp' | 'Telegram' | 'Website' | 'Unknown' {
-    const raw = String(phoneNumber || '').trim().toLowerCase();
+  private inferSenderSource(
+    phoneNumber: string | null | undefined,
+  ): 'WhatsApp' | 'Telegram' | 'Website' | 'Unknown' {
+    const raw = String(phoneNumber || '')
+      .trim()
+      .toLowerCase();
 
     if (!raw) {
       return 'Website';
     }
 
-    if (raw.startsWith('whatsapp:') || raw.startsWith('wa:') || raw.startsWith('+')) {
+    if (
+      raw.startsWith('whatsapp:') ||
+      raw.startsWith('wa:') ||
+      raw.startsWith('+')
+    ) {
       return 'WhatsApp';
     }
 
@@ -81,7 +99,11 @@ export class KioskApiService {
       return 'Telegram';
     }
 
-    if (raw.startsWith('web:') || raw.startsWith('site:') || raw.startsWith('portal:')) {
+    if (
+      raw.startsWith('web:') ||
+      raw.startsWith('site:') ||
+      raw.startsWith('portal:')
+    ) {
       return 'Website';
     }
 
@@ -105,7 +127,10 @@ export class KioskApiService {
       throw new UnauthorizedException('Invalid username or password');
     }
 
-    if (userName === this.dashboardUser && password === this.dashboardPassword) {
+    if (
+      userName === this.dashboardUser &&
+      password === this.dashboardPassword
+    ) {
       const token = this.createSession(userName, 'local');
       return {
         ok: true,
@@ -117,7 +142,9 @@ export class KioskApiService {
     }
 
     const nodeLogin = await this.nodeService.login(userName, password);
-    const latestPrinters = await this.getLatestPrinterList(String(nodeLogin.node?.id || ''));
+    const latestPrinters = await this.getLatestPrinterList(
+      String(nodeLogin.node?.id || ''),
+    );
     this.connection.nodeEmail = userName;
     this.connection.nodePassword = password;
     this.connection.agentId = nodeLogin.node?.code || this.connection.agentId;
@@ -190,14 +217,22 @@ export class KioskApiService {
   ) {
     this.requireSession(this.getToken(req));
 
-    if (typeof body.serverUrl === 'string') this.connection.serverUrl = body.serverUrl.trim();
-    if (typeof body.agentId === 'string') this.connection.agentId = body.agentId.trim();
-    if (typeof body.nodeEmail === 'string') this.connection.nodeEmail = body.nodeEmail.trim();
-    if (typeof body.nodePassword === 'string' && body.nodePassword.trim()) this.connection.nodePassword = body.nodePassword.trim();
-    if (typeof body.defaultPrinterName === 'string') this.connection.defaultPrinterName = body.defaultPrinterName.trim();
-    if (typeof body.pendingJobsPath === 'string' && body.pendingJobsPath.trim()) this.connection.pendingJobsPath = body.pendingJobsPath.trim();
-    if (typeof body.eventsPath === 'string' && body.eventsPath.trim()) this.connection.eventsPath = body.eventsPath.trim();
-    if (typeof body.loginPath === 'string' && body.loginPath.trim()) this.connection.loginPath = body.loginPath.trim();
+    if (typeof body.serverUrl === 'string')
+      this.connection.serverUrl = body.serverUrl.trim();
+    if (typeof body.agentId === 'string')
+      this.connection.agentId = body.agentId.trim();
+    if (typeof body.nodeEmail === 'string')
+      this.connection.nodeEmail = body.nodeEmail.trim();
+    if (typeof body.nodePassword === 'string' && body.nodePassword.trim())
+      this.connection.nodePassword = body.nodePassword.trim();
+    if (typeof body.defaultPrinterName === 'string')
+      this.connection.defaultPrinterName = body.defaultPrinterName.trim();
+    if (typeof body.pendingJobsPath === 'string' && body.pendingJobsPath.trim())
+      this.connection.pendingJobsPath = body.pendingJobsPath.trim();
+    if (typeof body.eventsPath === 'string' && body.eventsPath.trim())
+      this.connection.eventsPath = body.eventsPath.trim();
+    if (typeof body.loginPath === 'string' && body.loginPath.trim())
+      this.connection.loginPath = body.loginPath.trim();
 
     return this.getConnection(req);
   }
@@ -216,8 +251,13 @@ export class KioskApiService {
     }
 
     try {
-      const nodeLogin = await this.nodeService.login(this.connection.nodeEmail, this.connection.nodePassword);
-      const latestPrinters = await this.getLatestPrinterList(String(nodeLogin.node?.id || ''));
+      const nodeLogin = await this.nodeService.login(
+        this.connection.nodeEmail,
+        this.connection.nodePassword,
+      );
+      const latestPrinters = await this.getLatestPrinterList(
+        String(nodeLogin.node?.id || ''),
+      );
       this.connectionState.connected = true;
       this.connectionState.lastError = null;
       this.connectionState.lastCheckedAt = new Date().toISOString();
@@ -229,7 +269,8 @@ export class KioskApiService {
       };
     } catch (error) {
       this.connectionState.connected = false;
-      this.connectionState.lastError = error instanceof Error ? error.message : 'Connection failed';
+      this.connectionState.lastError =
+        error instanceof Error ? error.message : 'Connection failed';
       this.connectionState.lastCheckedAt = new Date().toISOString();
       return {
         ok: false,
@@ -246,46 +287,64 @@ export class KioskApiService {
       return this.emptyDashboard();
     }
 
-    const [kiosk, queueJobs, recentJobs, totalJobs, successfulJobs, failedJobs, revenueAgg, pagesAgg, paidAgg, auditLogs, notifications] = await Promise.all([
-      this.prisma.kiosk.findFirst({
-        where: { node_id: node.id },
-        orderBy: { updatedAt: 'desc' },
-      }),
-      this.prisma.printJob.findMany({
-        where: { node_id: node.id, status: 'PAID' },
-        orderBy: { createdAt: 'asc' },
-        take: 20,
-      }),
-      this.prisma.printJob.findMany({
-        where: { node_id: node.id },
-        orderBy: { updatedAt: 'desc' },
-        take: 30,
-      }),
-      this.prisma.printJob.count({ where: { node_id: node.id } }),
-      this.prisma.printJob.count({ where: { node_id: node.id, status: 'PRINTED' } }),
-      this.prisma.printJob.count({ where: { node_id: node.id, status: 'FAILED' } }),
-      this.prisma.printJob.aggregate({ where: { node_id: node.id }, _sum: { payable_amount: true } }),
-      this.prisma.printJob.aggregate({ where: { node_id: node.id }, _sum: { page_count: true } }),
-      this.prisma.payment.aggregate({
-        where: {
-          job: { node_id: node.id },
-          status: { in: ['PAID', 'SUCCESS', 'CAPTURED'] },
-        },
-        _sum: { amount: true },
-      }),
-      this.prisma.auditLog.findMany({
-        where: { node_id: node.id },
-        orderBy: { timestamp: 'desc' },
-        take: 30,
-      }),
-      this.prisma.kioskNotification.findMany({
-        where: { node_id: node.id },
-        orderBy: { created_at: 'desc' },
-        take: 20,
-      }),
-    ]);
+    const kiosk = await this.prisma.kiosk.findFirst({
+      where: { node_id: node.id },
+      orderBy: { updatedAt: 'desc' },
+    });
 
-    const heartbeatPrinters = Array.isArray(kiosk?.printer_list) ? (kiosk.printer_list as unknown[]) : [];
+    const queueJobs = await this.prisma.printJob.findMany({
+      where: { node_id: node.id, status: 'PAID' },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+    });
+
+    const recentJobs = await this.prisma.printJob.findMany({
+      where: { node_id: node.id },
+      orderBy: { updatedAt: 'desc' },
+      take: 30,
+    });
+
+    const totalJobs = await this.prisma.printJob.count({
+      where: { node_id: node.id },
+    });
+    const successfulJobs = await this.prisma.printJob.count({
+      where: { node_id: node.id, status: 'PRINTED' },
+    });
+    const failedJobs = await this.prisma.printJob.count({
+      where: { node_id: node.id, status: 'FAILED' },
+    });
+    const revenueAgg = await this.prisma.printJob.aggregate({
+      where: { node_id: node.id },
+      _sum: { payable_amount: true },
+    });
+    const pagesAgg = await this.prisma.printJob.aggregate({
+      where: { node_id: node.id },
+      _sum: { page_count: true },
+    });
+
+    const paidAgg = await this.prisma.payment.aggregate({
+      where: {
+        job: { node_id: node.id },
+        status: { in: ['PAID', 'SUCCESS', 'CAPTURED'] },
+      },
+      _sum: { amount: true },
+    });
+
+    const auditLogs = await this.prisma.auditLog.findMany({
+      where: { node_id: node.id },
+      orderBy: { timestamp: 'desc' },
+      take: 30,
+    });
+
+    const notifications = await this.prisma.kioskNotification.findMany({
+      where: { node_id: node.id },
+      orderBy: { created_at: 'desc' },
+      take: 20,
+    });
+
+    const heartbeatPrinters = Array.isArray(kiosk?.printer_list)
+      ? (kiosk.printer_list as unknown[])
+      : [];
     await this.maybeEmitHeartbeat(node.id, heartbeatPrinters);
 
     const expectedRevenue = this.toNumber(revenueAgg._sum.payable_amount);
@@ -317,14 +376,20 @@ export class KioskApiService {
           userName: job.user_name || job.phone_number || 'Unknown',
           sender: job.phone_number || null,
           source: this.inferSenderSource(job.phone_number),
-          documentName: job.document_name || this.extractDocumentName(job.file_urls) || 'Document',
+          documentName:
+            job.document_name ||
+            this.extractDocumentName(job.file_urls) ||
+            'Document',
           copies: job.copies,
           pages: job.page_count,
           sides: job.sides,
           color: job.color_mode === 'COLOR',
           amount: this.toNumber(job.payable_amount),
           status: job.status,
-          printerName: job.assigned_printer || this.connection.defaultPrinterName || 'Auto',
+          printerName:
+            job.assigned_printer ||
+            this.connection.defaultPrinterName ||
+            'Auto',
           createdAt: job.createdAt.toISOString(),
           phoneNumber: job.phone_number || null,
         })),
@@ -337,9 +402,13 @@ export class KioskApiService {
         sender: job.phone_number || null,
         source: this.inferSenderSource(job.phone_number),
         phoneNumber: job.phone_number || null,
-        documentName: job.document_name || this.extractDocumentName(job.file_urls) || 'Document',
+        documentName:
+          job.document_name ||
+          this.extractDocumentName(job.file_urls) ||
+          'Document',
         status: job.status,
-        printerName: job.assigned_printer || this.connection.defaultPrinterName || 'Auto',
+        printerName:
+          job.assigned_printer || this.connection.defaultPrinterName || 'Auto',
         pages: job.page_count,
         copies: job.copies,
         sides: job.sides,
@@ -430,9 +499,23 @@ export class KioskApiService {
   private extractPrinters(rawPrinterList: unknown) {
     const list = Array.isArray(rawPrinterList) ? rawPrinterList : [];
     return list.map((printer: any) => {
-      const healthScore = this.toNumber(printer?.health_score ?? printer?.healthScore ?? 100);
+      const healthScore = this.toNumber(
+        printer?.health_score ?? printer?.healthScore ?? 100,
+      );
       const ink = this.toNumber(printer?.ink_level ?? printer?.inkLevel ?? 100);
-      const online = Boolean(printer?.online ?? printer?.is_online ?? true);
+      
+      let online = true;
+      if (printer?.is_online !== undefined) {
+        online = Boolean(printer.is_online);
+      } else if (printer?.online !== undefined) {
+        online = Boolean(printer.online);
+      } else if (printer?.workOffline !== undefined) {
+        online = !Boolean(printer.workOffline);
+      } else if (printer?.printerStatus !== undefined && printer?.printerStatus === 128) {
+        // According to windows printer status, sometimes 128 means offline/error depending on drivers
+        // But workOffline is better.
+      }
+
       return {
         name: String(printer?.name || printer?.printer_name || 'Printer'),
         printerStatus: online ? 'ONLINE' : 'OFFLINE',
@@ -449,7 +532,10 @@ export class KioskApiService {
     }
 
     try {
-      const nodeLogin = await this.nodeService.login(this.connection.nodeEmail, this.connection.nodePassword);
+      const nodeLogin = await this.nodeService.login(
+        this.connection.nodeEmail,
+        this.connection.nodePassword,
+      );
       this.connectionState.connected = true;
       this.connectionState.lastError = null;
       this.connectionState.lastCheckedAt = new Date().toISOString();
@@ -460,7 +546,10 @@ export class KioskApiService {
       };
     } catch (error) {
       this.connectionState.connected = false;
-      this.connectionState.lastError = error instanceof Error ? error.message : 'Unable to resolve node context';
+      this.connectionState.lastError =
+        error instanceof Error
+          ? error.message
+          : 'Unable to resolve node context';
       this.connectionState.lastCheckedAt = new Date().toISOString();
       return null;
     }
@@ -527,7 +616,9 @@ export class KioskApiService {
       select: { printer_list: true },
     });
 
-    return Array.isArray(kiosk?.printer_list) ? (kiosk.printer_list as unknown[]) : [];
+    return Array.isArray(kiosk?.printer_list)
+      ? (kiosk.printer_list as unknown[])
+      : [];
   }
 
   private extractDocumentName(fileUrls: unknown): string | null {
@@ -536,8 +627,9 @@ export class KioskApiService {
       return null;
     }
 
-    const first = list[0] as any;
-    const rawUrl = typeof first === 'string' ? first : String(first?.url || '').trim();
+    const first = list[0];
+    const rawUrl =
+      typeof first === 'string' ? first : String(first?.url || '').trim();
     if (!rawUrl) {
       return null;
     }
@@ -556,8 +648,13 @@ export class KioskApiService {
     for (const item of list) {
       const printer = item as any;
       const onlineFlag = printer?.online ?? printer?.is_online;
-      const statusText = String(printer?.printerStatus || printer?.status || '').toUpperCase();
-      const online = typeof onlineFlag === 'boolean' ? onlineFlag : statusText.includes('ONLINE');
+      const statusText = String(
+        printer?.printerStatus || printer?.status || '',
+      ).toUpperCase();
+      const online =
+        typeof onlineFlag === 'boolean'
+          ? onlineFlag
+          : statusText.includes('ONLINE');
       if (online) {
         hasOnlinePrinter = true;
       }
@@ -589,7 +686,9 @@ export class KioskApiService {
         }
       }
 
-      const consumables = Array.isArray(printer?.consumables) ? printer.consumables : [];
+      const consumables = Array.isArray(printer?.consumables)
+        ? printer.consumables
+        : [];
       for (const consumable of consumables) {
         const percent = Number(consumable?.percent);
         if (Number.isFinite(percent)) {
@@ -618,7 +717,11 @@ export class KioskApiService {
     };
   }
 
-  private async maybeEmitHeartbeat(nodeId: unknown, printers: unknown[], force = false) {
+  private async maybeEmitHeartbeat(
+    nodeId: unknown,
+    printers: unknown[],
+    force = false,
+  ) {
     const id = String(nodeId || '').trim();
     if (!id) {
       return;
@@ -665,7 +768,9 @@ export class KioskApiService {
         reasons_if_not_ready: reasonsIfNotReady,
       },
       auth: {
-        authenticated: Boolean(this.connection.nodeEmail && this.connection.nodePassword),
+        authenticated: Boolean(
+          this.connection.nodeEmail && this.connection.nodePassword,
+        ),
         token_expires_in: this.heartbeatAuthTtlSeconds,
       },
     };
@@ -673,14 +778,20 @@ export class KioskApiService {
     try {
       const paperLevel = printerReadiness.lowInk ? 'LOW' : 'HIGH';
       await this.nodeService.updateHeartbeat(id, paperLevel, printerList);
-      await this.nodeService.ingestAgentEvent(id, 'HEARTBEAT', heartbeatPayload, timestampIso);
+      await this.nodeService.ingestAgentEvent(
+        id,
+        'HEARTBEAT',
+        heartbeatPayload,
+        timestampIso,
+      );
       this.lastHeartbeatByNodeId.set(id, now);
       this.connectionState.connected = true;
       this.connectionState.lastError = null;
       this.connectionState.lastCheckedAt = new Date(now).toISOString();
     } catch (error) {
       this.connectionState.connected = false;
-      this.connectionState.lastError = error instanceof Error ? error.message : 'Heartbeat failed';
+      this.connectionState.lastError =
+        error instanceof Error ? error.message : 'Heartbeat failed';
       this.connectionState.lastCheckedAt = new Date(now).toISOString();
     }
   }
