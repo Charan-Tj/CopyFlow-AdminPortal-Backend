@@ -108,7 +108,11 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         });
 
         TelegramProvider.bot.on('callback_query', async (ctx: any) => {
-            const parsed = await this.parseIncomingWebhook({ type: 'callback', ctx });
+            let parsed = await this.parseIncomingWebhook({ type: 'callback', ctx });
+            // Issue 8: map "shop_AIT01" callback → "shop AIT01" so existing handler picks it up
+            if (parsed.message?.startsWith('shop_')) {
+                parsed = { ...parsed, message: parsed.message.replace('shop_', 'shop ') };
+            }
             if (parsed.sender) {
                 await this.queueService.add('process-incoming', parsed);
             }
@@ -120,6 +124,26 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
 
     private formatTo(to: string): number {
         return parseInt(to.replace('telegram:', '').replace('whatsapp:', '').replace('+', ''), 10);
+    }
+
+    // Issue 8: Send inline keyboard with shop list for Telegram /start
+    async sendShopSelector(to: string, nodes: { node_code: string; name: string; college: string; city: string }[]): Promise<void> {
+        const chatId = this.formatTo(to);
+        if (isNaN(chatId) || !TelegramProvider.bot) return;
+
+        const buttons = nodes.map(n =>
+            [Markup.button.callback(`🏪 ${n.name} (${n.node_code})`, `shop_${n.node_code}`)]
+        );
+
+        try {
+            await TelegramProvider.bot.telegram.sendMessage(
+                chatId,
+                '👋 Welcome to CopyFlow!\n\nSelect your print shop to get started:',
+                Markup.inlineKeyboard(buttons)
+            );
+        } catch (error: any) {
+            this.logger.error(`Error sending shop selector to ${to}: ${error.message}`);
+        }
     }
 
     async sendTextMessage(to: string, body: string): Promise<void> {

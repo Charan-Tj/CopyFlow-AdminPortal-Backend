@@ -1,4 +1,5 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+ import { Cron } from '@nestjs/schedule';
 import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import axios from 'axios';
@@ -37,6 +38,12 @@ interface ChatState {
     platform?: 'telegram' | 'meta' | 'twilio';
     useFlow?: boolean;
     startedAt?: number;
+    // Issue 3: custom copies validation loop
+    awaitingCustomCopies?: boolean;
+    // Issue 4: duplicate file detection
+    _pendingUrls?: string[];
+    // Issue 6: kiosk offline — preserve preferences
+    kioskBlockedAt?: number;
 }
 
 @Injectable()
@@ -279,7 +286,21 @@ export class WhatsappService {
                 session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined };
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
-                await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.\n\nTo select a shop, type: shop <shop_code>');
+
+                // Issue 8: Telegram /start — show inline shop selector
+                if (sender.startsWith('telegram:')) {
+                    const activeNodes = await this.prisma.node.findMany({
+                        where: { is_active: true },
+                        select: { node_code: true, name: true, college: true, city: true },
+                        take: 8,
+                    });
+                    if (activeNodes.length > 0) {
+                        await this.telegramProvider.sendShopSelector(sender, activeNodes);
+                        return null;
+                    }
+                }
+
+                await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.\n\nType: shop <code> to select a shop. Type: shops to list all shops.\n\n💡 Type HELP anytime if you get stuck.');
                 return null;
             }
 
@@ -409,7 +430,7 @@ export class WhatsappService {
             // AWAITING_FILE — supports multiple file uploads
             // ═══════════════════════════════════════════
             if (session.step === 'AWAITING_FILE') {
-                // Handle QR code start command
+                // Handle QR code start command — Issue 1: richer response
                 if (normalizedMessage.startsWith('start ')) {
                     const qrToken = normalizedMessage.split(' ')[1];
                     const node = await this.prisma.node.findUnique({
@@ -420,9 +441,24 @@ export class WhatsappService {
                         session.nodeCode = node.node_code;
                         await this.saveSession(sender, session);
                         await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, `Welcome to CopyFlow @ ${node.name}! Please send your files (PDF/Word/image) to get started.`);
+                        await this.sendTextMessage(sender,
+                            `Welcome to CopyFlow @ ${node.name}! 👋\n📍 ${node.college}, ${node.city}\n\nSend your files (PDF, Word, or image) to get started.\nYou can send multiple files — tap "Done" when finished.\n\n💡 Type HELP anytime if you get stuck.`
+                        );
                     } else {
-                        await this.sendTextMessage(sender, "Invalid or expired QR code. Please scan a valid shop QR code.");
+                        const activeNodes = await this.prisma.node.findMany({
+                            where: { is_active: true },
+                            select: { node_code: true, name: true, college: true, city: true },
+                            take: 8,
+                        });
+                        let errMsg = `❌ Invalid or expired QR code.`;
+                        if (activeNodes.length > 0) {
+                            errMsg += `\n\n📍 Available shops:`;
+                            for (const n of activeNodes) {
+                                errMsg += `\n• ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
+                            }
+                            errMsg += `\n\nType: shop <code> to select a shop manually.`;
+                        }
+                        await this.sendTextMessage(sender, errMsg);
                     }
                     return null;
                 }
@@ -461,8 +497,23 @@ export class WhatsappService {
                     return null;
                 }
 
-                // User sends a file
+                // User sends a file — Issue 4: duplicate file detection
                 if (mediaUrl) {
+                    const alreadyQueued =
+                        session.files.some(f => f.url === mediaUrl) ||
+                        (session._pendingUrls || []).includes(mediaUrl);
+
+                    if (alreadyQueued) {
+                        await this.sendTextMessage(sender,
+                            '⚠️ Looks like you already sent this file. Send a different file or tap "Done" to continue.'
+                        );
+                        return null;
+                    }
+
+                    if (!session._pendingUrls) session._pendingUrls = [];
+                    session._pendingUrls.push(mediaUrl);
+                    await this.saveSession(sender, session);
+
                     await this.sendTypingIndicator(sender);
                     const fileNum = session.files.length + 1;
                     await this.sendTextMessage(sender, `📄 Analyzing file ${fileNum}...`);
@@ -476,6 +527,7 @@ export class WhatsappService {
                         name: fileName || `file_${fileNum}`,
                     };
                     session.files.push(fileEntry);
+                    session._pendingUrls = (session._pendingUrls || []).filter(u => u !== mediaUrl);
                     await this.saveSession(sender, session);
 
                     const totalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
@@ -506,14 +558,32 @@ export class WhatsappService {
             }
 
             if (session.step === 'AWAITING_COPIES') {
+                // Issue 3: custom copies — check flag first
+                if (session.awaitingCustomCopies) {
+                    const num = parseInt(normalizedMessage.match(/\d+/)?.[0] || '', 10);
+                    if (isNaN(num) || num < 1 || num > 99) {
+                        await this.sendTextMessage(sender, '❌ Please enter a number between 1 and 99.');
+                        return null;
+                    }
+                    session.copies = num;
+                    session.awaitingCustomCopies = false;
+                    session.step = 'AWAITING_COLOR';
+                    await this.saveSession(sender, session);
+                    await this.sendTypingIndicator(sender);
+                    await this.sendContentMessage(sender, 'cf_color_quickrep');
+                    return null;
+                }
+
                 let copies = 1;
                 if (normalizedMessage === 'other' || normalizedMessage === 'copies_other') {
+                    session.awaitingCustomCopies = true;
+                    await this.saveSession(sender, session);
                     try {
                         await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, "Please type the number of copies you want:");
+                        await this.sendTextMessage(sender, 'How many copies? Please type a number (e.g. 5):');
                         return null;
                     } catch (err) {
-                        return "Please type the number of copies you want:";
+                        return 'How many copies? Please type a number:';
                     }
                 }
 
@@ -575,6 +645,12 @@ export class WhatsappService {
 
             if (session.step === 'AWAITING_CONFIRMATION') {
                 const pricePerPage = session.color ? 10 : 2;
+
+                // Issue 6: kiosk was blocked — retry falls through to confirm logic
+                if (session.kioskBlockedAt && (normalizedMessage === 'retry' || normalizedMessage.includes('confirm'))) {
+                    session.kioskBlockedAt = undefined;
+                }
+
                 if (normalizedMessage.includes('confirm_pay') || normalizedMessage.includes('confirm') || normalizedMessage === 'pay' || normalizedMessage === 'yes') {
                     session.step = 'AWAITING_PAYMENT';
                     await this.saveSession(sender, session);
@@ -602,6 +678,18 @@ export class WhatsappService {
             }
 
             if (session.step === 'AWAITING_PAYMENT') {
+                // Issue 5: Expired payment links — RETRY command
+                if (normalizedMessage === 'retry' || normalizedMessage === 'renew' || normalizedMessage === 'new link') {
+                    session.paymentLink = undefined;
+                    session.phonepeLink = undefined;
+                    session.cashfreeLink = undefined;
+                    session.jobId = undefined;
+                    session.step = 'AWAITING_CONFIRMATION';
+                    await this.saveSession(sender, session);
+                    await this.sendTextMessage(sender, '🔄 Generating a fresh payment link...');
+                    return await this.handleIncomingMessage(sender, 'confirm_pay');
+                }
+
                 let msgLinks = '';
                 if (session.paymentLink) {
                     msgLinks = `🔗 Payment link: ${session.paymentLink}`;
@@ -626,7 +714,7 @@ export class WhatsappService {
                     }
                 }
 
-                const msg = `We are waiting for your payment of ₹${session.price} to be confirmed.\n\n${msgLinks}`;
+                const msg = `We are waiting for your payment of ₹${session.price} to be confirmed.\n\n${msgLinks}\n\nLink expired? Reply *RETRY* for a new one.`;
                 try {
                     await this.sendTypingIndicator(sender);
                     await this.sendTextMessage(sender, msg);
@@ -682,12 +770,59 @@ export class WhatsappService {
         });
     }
 
+    // Issue 2: Session TTL — 30-minute cleanup cron
+    @Cron('*/15 * * * *')
+    async cleanupExpiredSessions(): Promise<void> {
+        const cutoff = new Date(Date.now() - 30 * 60 * 1000);
+        try {
+            const expiredRows = await this.prisma.chatSession.findMany({
+                where: { updatedAt: { lt: cutoff } },
+                select: { sender: true, data: true },
+            });
+
+            const toDelete = expiredRows
+                .filter(row => {
+                    const d = row.data as any;
+                    return d?.step !== 'PAID' && d?.step !== 'PRINTED';
+                })
+                .map(row => row.sender);
+
+            if (toDelete.length > 0) {
+                await this.prisma.chatSession.deleteMany({
+                    where: { sender: { in: toDelete } },
+                });
+                toDelete.forEach(s => this.sessionCache.delete(s));
+                this.logger.log(`Cleaned up ${toDelete.length} expired sessions`);
+            }
+        } catch (err: any) {
+            this.logger.warn(`Session TTL cleanup failed: ${err.message}`);
+        }
+    }
+
+    // Issue 7: enhanced order summary with file names
     private generateOrderSummary(session: ChatState, pricePerPage: number): string {
         const fileCount = session.files?.length || 0;
-        const filesText = fileCount > 1 ? `${fileCount} files, ${session.pages || 1} total pages` : `${session.pages || 1} pages`;
-        const isColorStr = session.color ? 'Color' : 'Black and White';
-        const price = session.price || ((session.pages || 1) * (session.copies || 1) * pricePerPage);
-        return `📋 Order Summary:\n• ${filesText}\n• ${session.copies || 1} copies × ${session.sides}-sided\n• ${isColorStr} @ ₹${pricePerPage}/page\n\n💰 Total Amount: ₹${price}`;
+        const totalPages = session.pages || 1;
+
+        let filesText = '';
+        if (fileCount === 1) {
+            filesText = `📄 ${session.files[0]?.name || 'File'} (${totalPages} pages)`;
+        } else if (fileCount > 1) {
+            const preview = session.files.slice(0, 3)
+                .map(f => `  • ${f.name} (${f.pages} pg)`).join('\n');
+            const more = fileCount > 3 ? `\n  ...and ${fileCount - 3} more` : '';
+            filesText = `📄 ${fileCount} files, ${totalPages} total pages\n${preview}${more}`;
+        } else {
+            filesText = `📄 ${totalPages} pages`;
+        }
+
+        const colorStr = session.color ? '🎨 Color' : '⬛ Black & White';
+        const sidesStr = session.sides === 'double' ? 'Double-sided' : 'Single-sided';
+        const copies = session.copies || 1;
+        const copiesStr = copies === 1 ? '1 copy' : `${copies} copies`;
+        const price = session.price || (totalPages * copies * pricePerPage);
+
+        return `📋 *Order Summary*\n\n${filesText}\n• ${copiesStr} · ${sidesStr}\n• ${colorStr} @ ₹${pricePerPage}/page\n\n💰 *Total: ₹${price}*`;
     }
 
     private async createPaymentLinksAndNotify(session: ChatState, sender: string, pricePerPage: number): Promise<string | null> {
@@ -702,20 +837,17 @@ export class WhatsappService {
 
             const kioskStatus = await this.getNodeKioskStatusSnapshot(session.nodeId, session.nodeCode);
             if (!kioskStatus.isPrintingReady) {
-                session.step = 'AWAITING_SIDES';
-                session.jobId = undefined;
-                session.paymentLink = undefined;
-                session.phonepeLink = undefined;
-                session.cashfreeLink = undefined;
+                // Issue 6: kiosk offline — preserve all preferences, keep in AWAITING_CONFIRMATION
+                session.kioskBlockedAt = Date.now();
                 await this.saveSession(sender, session);
 
-                const blockMessage = `⚠️ The selected kiosk is currently not ready for printing (${kioskStatus.reason}). Payment link was not generated. Please try again in a few minutes.`;
+                const msg = `⚠️ The print shop is temporarily offline (${kioskStatus.reason}).\n\nYour order is saved. Reply *RETRY* in a few minutes and we'll try again.\n\n${this.generateOrderSummary(session, pricePerPage)}`;
                 try {
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, blockMessage);
+                    await this.sendTextMessage(sender, msg);
                     return null;
                 } catch {
-                    return blockMessage;
+                    return msg;
                 }
             }
 
