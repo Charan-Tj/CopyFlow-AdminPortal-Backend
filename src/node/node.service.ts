@@ -205,18 +205,6 @@ export class NodeService {
             });
         }
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: `AGENT_${type}`,
-                node_id: nodeId,
-                metadata: {
-                    source: 'kiosk-agent',
-                    at: eventTime.toISOString(),
-                    payload
-                }
-            }
-        });
-
         return { success: true };
     }
 
@@ -239,14 +227,6 @@ export class NodeService {
         await this.prisma.printJob.update({
             where: { job_id: jobId },
             data: { status: 'PRINTED' }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'JOB_PRINTED',
-                node_id: nodeId,
-                metadata: { jobId }
-            }
         });
 
         if (job.phone_number) {
@@ -326,14 +306,6 @@ export class NodeService {
             data: { status: 'FAILED' }
         });
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'JOB_FAILED',
-                node_id: nodeId,
-                metadata: { jobId, reason, error_code: errorCode }
-            }
-        });
-
         if (job.phone_number) {
             const msg = `❌ Sorry, your print job failed. Reason: ${reason}. \n   Please contact the shop operator.`;
             // Bypass private typing to avoid touching whatsapp module
@@ -404,14 +376,6 @@ export class NodeService {
             data: { used: true, used_at: new Date() }
         });
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'NODE_SELF_REGISTERED',
-                node_id: node.id,
-                metadata: { email, code }
-            }
-        });
-
         const payload = {
             nodeId: node.id,
             nodeCode: node.node_code,
@@ -437,15 +401,6 @@ export class NodeService {
 
         const regCode = await this.prisma.registrationCode.create({
             data: { node_id: nodeId, code, created_by: createdBy, expires_at }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'REGISTRATION_CODE_GENERATED',
-                node_id: nodeId,
-                actor: createdBy,
-                metadata: { code }
-            }
         });
 
         return {

@@ -287,6 +287,9 @@ export class KioskApiService {
       return this.emptyDashboard();
     }
 
+    const jobsLimit = Math.min(100, parseInt(req.query?.jobsLimit || '30', 10));
+    const jobsOffset = parseInt(req.query?.jobsOffset || '0', 10);
+
     const kiosk = await this.prisma.kiosk.findFirst({
       where: { node_id: node.id },
       orderBy: { updatedAt: 'desc' },
@@ -301,7 +304,8 @@ export class KioskApiService {
     const recentJobs = await this.prisma.printJob.findMany({
       where: { node_id: node.id },
       orderBy: { updatedAt: 'desc' },
-      take: 30,
+      take: jobsLimit,
+      skip: jobsOffset,
     });
 
     const totalJobs = await this.prisma.printJob.count({
@@ -330,17 +334,8 @@ export class KioskApiService {
       _sum: { amount: true },
     });
 
-    const auditLogs = await this.prisma.auditLog.findMany({
-      where: { node_id: node.id },
-      orderBy: { timestamp: 'desc' },
-      take: 30,
-    });
-
-    const notifications = await this.prisma.kioskNotification.findMany({
-      where: { node_id: node.id },
-      orderBy: { created_at: 'desc' },
-      take: 20,
-    });
+    // Removed auditLogs and notifications to reduce latency
+    // as they are not currently displayed in the streamlined Kiosk UI
 
     const heartbeatPrinters = Array.isArray(kiosk?.printer_list)
       ? (kiosk.printer_list as unknown[])
@@ -424,19 +419,8 @@ export class KioskApiService {
         paid: paidRevenue,
         delta: Number((paidRevenue - expectedRevenue).toFixed(2)),
       },
-      notifications: notifications.map((item) => ({
-        id: item.id,
-        type: item.type,
-        severity: item.severity,
-        message: item.message,
-        acknowledged: item.acknowledged,
-        createdAt: item.created_at.toISOString(),
-      })),
-      auditLogs: auditLogs.map((entry) => ({
-        time: entry.timestamp.toISOString(),
-        actor: entry.actor || entry.node_id || 'system',
-        action: entry.event,
-      })),
+      notifications: [],
+      auditLogs: [],
     };
   }
 
@@ -448,10 +432,14 @@ export class KioskApiService {
       return { logs: [] };
     }
 
+    const limit = Math.min(100, parseInt(req.query?.limit || '10', 10));
+    const offset = parseInt(req.query?.offset || '0', 10);
+
     const logs = await this.prisma.kioskSystemLog.findMany({
       where: { node_id: node.id },
       orderBy: { created_at: 'desc' },
-      take: 100,
+      take: limit,
+      skip: offset,
     });
 
     return {
@@ -460,6 +448,10 @@ export class KioskApiService {
         level: entry.level,
         message: entry.message,
       })),
+      page: {
+        hasMore: logs.length === limit,
+        nextOffset: offset + logs.length,
+      },
     };
   }
 
@@ -503,15 +495,18 @@ export class KioskApiService {
         printer?.health_score ?? printer?.healthScore ?? 100,
       );
       const ink = this.toNumber(printer?.ink_level ?? printer?.inkLevel ?? 100);
-      
+
       let online = true;
       if (printer?.is_online !== undefined) {
         online = Boolean(printer.is_online);
       } else if (printer?.online !== undefined) {
         online = Boolean(printer.online);
       } else if (printer?.workOffline !== undefined) {
-        online = !Boolean(printer.workOffline);
-      } else if (printer?.printerStatus !== undefined && printer?.printerStatus === 128) {
+        online = !printer.workOffline;
+      } else if (
+        printer?.printerStatus !== undefined &&
+        printer?.printerStatus === 128
+      ) {
         // According to windows printer status, sometimes 128 means offline/error depending on drivers
         // But workOffline is better.
       }
