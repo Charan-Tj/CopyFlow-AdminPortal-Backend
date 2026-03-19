@@ -502,6 +502,15 @@ export class KioskApiService {
         hasOnlinePrinter = true;
       }
 
+      // Detect virtual/PDF printers for testing purposes
+      const printerName = String(printer?.name || '').toLowerCase();
+      const isVirtualPrinter =
+        printerName.includes('pdf') ||
+        printerName.includes('xps') ||
+        printerName.includes('onenote') ||
+        printerName.includes('fax') ||
+        printerName.includes('microsoft print to');
+
       const inkSamples: number[] = [];
       const directInkFields = [
         printer?.ink_level,
@@ -526,6 +535,11 @@ export class KioskApiService {
         if (Number.isFinite(percent)) {
           inkSamples.push(percent);
         }
+      }
+
+      // For virtual printers, assume 100% ink (testing mode)
+      if (isVirtualPrinter && inkSamples.length === 0) {
+        inkSamples.push(100);
       }
 
       if (inkSamples.length > 0) {
