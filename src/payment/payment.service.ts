@@ -78,16 +78,38 @@ export class PaymentService {
         }
 
         if (session && sender) {
+            const universalCopies = Number(session.copies || 1);
+            const safeUniversalCopies = Number.isFinite(universalCopies) && universalCopies > 0 ? universalCopies : 1;
+
+            const fileUrls = Array.isArray(session.files)
+                ? session.files
+                    .map((file: any) => {
+                        const url = String(file?.url || '').trim();
+                        if (!url) {
+                            return null;
+                        }
+
+                        const perFileCopies = Number(file?.copies ?? safeUniversalCopies);
+                        return {
+                            url,
+                            copies: Number.isFinite(perFileCopies) && perFileCopies > 0 ? perFileCopies : safeUniversalCopies
+                        };
+                    })
+                    .filter((entry: any) => Boolean(entry))
+                : [];
+
             const jobData = {
-                fileUrl: session.files?.length > 0 ? session.files[0].url : undefined,
+                fileUrl: fileUrls[0]?.url,
+                fileUrls,
                 files: session.files || [],
-                copies: session.copies,
+                copies: safeUniversalCopies,
                 color: session.color,
                 sides: session.sides,
                 pages: session.pages,
                 nodeId: session.nodeId,
                 jobId: session.jobId || `wa_${Date.now()}`,
-                sender: sender
+                sender: sender,
+                userName: session.userName
             };
 
             const printSuccess = await this.printService.sendJobToPrinter(jobData);

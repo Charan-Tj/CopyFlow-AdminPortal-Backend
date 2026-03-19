@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException, ConflictException, NotFoundException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import { R2Service } from '../r2/r2.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -9,7 +10,7 @@ import { deriveRuntimeStatus, evaluateKioskStatus } from './kiosk-status.util';
 
 @Injectable()
 export class NodeService {
-    constructor(
+    constructor(private readonly r2Storage: R2Service, 
         private prisma: PrismaService,
         private jwtService: JwtService,
         @Inject(forwardRef(() => WhatsappService))
@@ -112,26 +113,29 @@ export class NodeService {
             }
         });
 
-        const supabaseUrl = process.env.SUPABASE_URL || '';
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-        const supabase = createClient(supabaseUrl, supabaseKey);
-
         const jobsWithUrls = await Promise.all(jobs.map(async (job) => {
-            let signedFileUrl = job.file_url;
-            if (job.file_url) {
-                const urlParts = job.file_url.split('/');
+            const rawFileUrls = Array.isArray(job.file_urls)
+                ? (job.file_urls as any[])
+                : [];
+
+            const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+                let signedFileUrl = '';
+                const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
+                const urlParts = String(rawUrl).split('/');
                 const filename = urlParts[urlParts.length - 1];
                 if (filename) {
-                    const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-                    if (data?.signedUrl) {
-                        signedFileUrl = data.signedUrl;
-                    }
+                    signedFileUrl = await this.r2Storage.getSignedUrl(filename, 900);
                 }
-            }
+                const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
+                return {
+                    url: signedFileUrl || rawUrl,
+                    copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(job.copies || 1)
+                };
+            }));
 
             return {
                 ...job,
-                file_url: signedFileUrl,
+                file_urls: signedFileUrls.filter((entry) => Boolean(entry)),
                 expires_at: new Date(now.getTime() + 15 * 60 * 1000)
             };
         }));
@@ -201,18 +205,6 @@ export class NodeService {
             });
         }
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: `AGENT_${type}`,
-                node_id: nodeId,
-                metadata: {
-                    source: 'kiosk-agent',
-                    at: eventTime.toISOString(),
-                    payload
-                }
-            }
-        });
-
         return { success: true };
     }
 
@@ -235,14 +227,6 @@ export class NodeService {
         await this.prisma.printJob.update({
             where: { job_id: jobId },
             data: { status: 'PRINTED' }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'JOB_PRINTED',
-                node_id: nodeId,
-                metadata: { jobId }
-            }
         });
 
         if (job.phone_number) {
@@ -277,25 +261,28 @@ export class NodeService {
             }
         });
 
-        const supabaseUrl = process.env.SUPABASE_URL || '';
-        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-        const supabase = createClient(supabaseUrl, supabaseKey);
+        const rawFileUrls = Array.isArray(updatedJob.file_urls)
+            ? (updatedJob.file_urls as any[])
+            : [];
 
-        let signedFileUrl = updatedJob.file_url;
-        if (updatedJob.file_url) {
-            const urlParts = updatedJob.file_url.split('/');
+        const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
+            let signedFileUrl = '';
+            const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
+            const urlParts = String(rawUrl).split('/');
             const filename = urlParts[urlParts.length - 1];
             if (filename) {
-                const { data } = await supabase.storage.from('copyflow-jobs').createSignedUrl(filename, 900);
-                if (data?.signedUrl) {
-                    signedFileUrl = data.signedUrl;
-                }
+                signedFileUrl = await this.r2Storage.getSignedUrl(filename, 900);
             }
-        }
+            const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
+            return {
+                url: signedFileUrl || rawUrl,
+                copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(updatedJob.copies || 1)
+            };
+        }));
 
         return {
             job_id: updatedJob.job_id,
-            file_url: signedFileUrl,
+            file_urls: signedFileUrls.filter((entry) => Boolean(entry)),
             file_checksum: updatedJob.file_checksum,
             copies: updatedJob.copies,
             color: updatedJob.color_mode === 'COLOR',
@@ -317,14 +304,6 @@ export class NodeService {
         await this.prisma.printJob.update({
             where: { job_id: jobId },
             data: { status: 'FAILED' }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'JOB_FAILED',
-                node_id: nodeId,
-                metadata: { jobId, reason, error_code: errorCode }
-            }
         });
 
         if (job.phone_number) {
@@ -397,14 +376,6 @@ export class NodeService {
             data: { used: true, used_at: new Date() }
         });
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'NODE_SELF_REGISTERED',
-                node_id: node.id,
-                metadata: { email, code }
-            }
-        });
-
         const payload = {
             nodeId: node.id,
             nodeCode: node.node_code,
@@ -430,15 +401,6 @@ export class NodeService {
 
         const regCode = await this.prisma.registrationCode.create({
             data: { node_id: nodeId, code, created_by: createdBy, expires_at }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'REGISTRATION_CODE_GENERATED',
-                node_id: nodeId,
-                actor: createdBy,
-                metadata: { code }
-            }
         });
 
         return {

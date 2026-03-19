@@ -44,7 +44,7 @@ model PrintJob {
   phone_number        String?
   copies              Int                      @default(1)
   sides               String                   @default("single")
-  file_url            String?
+  file_urls           Json?
   file_checksum       String?
   page_count          Int
   color_mode          ColorMode
@@ -95,16 +95,6 @@ model PrintToken {
   used       Boolean  @default(false)
   createdAt  DateTime @default(now())
   job        PrintJob @relation(fields: [job_id], references: [job_id])
-}
-
-model AuditLog {
-  id        String   @id @default(uuid())
-  event     String
-  actor     String?
-  metadata  Json?
-  timestamp DateTime @default(now())
-  node_id   String?
-  node      Node?    @relation(fields: [node_id], references: [id])
 }
 
 model User {
@@ -319,7 +309,6 @@ model Node {
   jobs                 PrintJob[]
   credentials          NodeCredential[]
   pricing              PricingConfig[]
-  audit_logs           AuditLog[]
   registration_codes   RegistrationCode[]
   printer_snapshots    KioskPrinterSnapshot[]
   daily_metrics        KioskDailyMetric[]

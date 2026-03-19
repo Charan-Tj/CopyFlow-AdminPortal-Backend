@@ -1,7 +1,6 @@
 require('dotenv').config();
 
 const crypto = require('node:crypto');
-const path = require('node:path');
 const express = require('express');
 const { listPrinters } = require('./printers');
 const serverApi = require('./serverApi');
@@ -46,7 +45,6 @@ let queueBusy = false;
 const sessions = new Map();
 
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, '..', 'public')));
 
 function getSessionToken(req) {
   const authHeader = String(req.headers.authorization || '').trim();
@@ -204,25 +202,74 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 function normalizeJob(rawJob = {}) {
-  const id = rawJob.id || rawJob.jobId || `job-${Date.now()}-${Math.round(Math.random() * 1000)}`;
-  const pages = Number(rawJob.pages || 1);
+  const id = rawJob.id || rawJob.jobId || rawJob.job_id || `job-${Date.now()}-${Math.round(Math.random() * 1000)}`;
+  const pages = Number(rawJob.pages || rawJob.page_count || 1);
   const copies = Number(rawJob.copies || 1);
+  const safeCopies = Number.isFinite(copies) && copies > 0 ? copies : 1;
+  const normalizedFileUrls = Array.isArray(rawJob.fileUrls)
+    ? rawJob.fileUrls
+    : (Array.isArray(rawJob.file_urls) ? rawJob.file_urls : []);
+  const fileEntries = normalizedFileUrls
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        const url = entry.trim();
+        if (!url) {
+          return null;
+        }
+        return { url, copies: safeCopies };
+      }
+
+      if (entry && typeof entry === 'object') {
+        const url = String(entry.url || '').trim();
+        if (!url) {
+          return null;
+        }
+        const entryCopies = Number(entry.copies ?? safeCopies);
+        return {
+          url,
+          copies: Number.isFinite(entryCopies) && entryCopies > 0 ? entryCopies : safeCopies
+        };
+      }
+
+      return null;
+    })
+    .filter((entry) => Boolean(entry));
+  const primaryFileUrl = rawJob.fileUrl || rawJob.file_url || fileEntries[0]?.url || null;
+  const finalFileEntries = fileEntries.length > 0 ? fileEntries : (primaryFileUrl ? [{ url: primaryFileUrl, copies: safeCopies }] : []);
 
   return {
     ...rawJob,
     id,
     jobId: id,
-    userName: rawJob.userName || 'unknown-user',
-    documentName: rawJob.documentName || rawJob.fileName || 'document.pdf',
+    fileUrl: primaryFileUrl,
+    fileUrls: finalFileEntries,
+    fileEntries: finalFileEntries,
+    userName: rawJob.userName || rawJob.user_name || 'unknown-user',
+    documentName: rawJob.documentName || rawJob.document_name || rawJob.fileName || 'document.pdf',
     pages: Number.isFinite(pages) && pages > 0 ? pages : 1,
-    copies: Number.isFinite(copies) && copies > 0 ? copies : 1,
-    color: Boolean(rawJob.color),
+    copies: safeCopies,
+    color: rawJob.color_mode ? String(rawJob.color_mode).toUpperCase() === 'COLOR' : Boolean(rawJob.color),
     paperSize: rawJob.paperSize || 'A4'
   };
 }
 
+async function safeReportJobUpdate(jobId, status, details = {}) {
+  try {
+    await serverApi.reportJobUpdate(jobId, status, details);
+  } catch (error) {
+    addLog('warn', 'Failed to report job update to backend', {
+      jobId,
+      status,
+      error: error.message
+    });
+  }
+}
+
 function fingerprintForJob(job) {
-  return [job.userName, job.documentName, job.fileUrl, job.pages, job.copies].join('|');
+  const filesKey = Array.isArray(job.fileEntries) && job.fileEntries.length > 0
+    ? job.fileEntries.map((entry) => `${entry.url}:${entry.copies || 1}`).join(',')
+    : (job.fileUrl || '');
+  return [job.userName, job.documentName, filesKey, job.pages, job.copies].join('|');
 }
 
 function estimateCost(job) {
@@ -256,6 +303,14 @@ function resolvePrinterForJob(job) {
   for (const rule of state.settings.routingRules) {
     if (rule.routeToPrinter && job[rule.key] === rule.match) {
       return rule.routeToPrinter;
+    }
+  }
+
+  const configuredDefault = String(state.settings.defaultPrinterName || '').trim();
+  if (configuredDefault) {
+    const matchingPrinter = state.printers.find((printer) => printer.name === configuredDefault);
+    if (matchingPrinter) {
+      return matchingPrinter.name;
     }
   }
 
@@ -344,13 +399,33 @@ function computeReconciliation() {
   };
 }
 
-function dashboardSnapshot() {
+function parsePositiveInt(value, fallback, max) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  if (typeof max === 'number') {
+    return Math.min(parsed, max);
+  }
+
+  return parsed;
+}
+
+function dashboardSnapshot(options = {}) {
+  const jobsLimit = parsePositiveInt(options.jobsLimit, 10, 100);
+  const jobsOffset = parsePositiveInt(options.jobsOffset, 0);
   const connection = serverApi.getConfig();
   const kioskName =
     String(process.env.KIOSK_NAME || '').trim() ||
     connection.nodeName ||
     connection.agentId ||
     'Local Kiosk';
+
+  const completedStatuses = new Set(['PRINTED', 'COMPLETED', 'FAILED', 'CANCELLED']);
+  const previousJobs = state.jobs.filter((job) => completedStatuses.has(String(job.status || '').toUpperCase()));
+  const pagedJobs = previousJobs.slice(jobsOffset, jobsOffset + jobsLimit);
+  const jobsNextOffset = jobsOffset + pagedJobs.length;
 
   return {
     kiosk: {
@@ -367,7 +442,7 @@ function dashboardSnapshot() {
     },
     queue: {
       count: state.queue.length,
-      jobs: state.queue.slice(0, 100)
+      jobs: state.queue
     },
     metrics: {
       totalJobs: state.metrics.totalJobs,
@@ -380,9 +455,15 @@ function dashboardSnapshot() {
     reconciliation: computeReconciliation(),
     diagnostics: computeDiagnostics(),
     printers: enrichPrinters(),
-    jobs: state.jobs.slice(0, 200),
+    jobs: pagedJobs,
+    jobsPage: {
+      offset: jobsOffset,
+      limit: jobsLimit,
+      total: previousJobs.length,
+      hasMore: jobsNextOffset < previousJobs.length,
+      nextOffset: jobsNextOffset
+    },
     notifications: state.notifications.slice(0, 100),
-    auditLogs: state.auditLogs.slice(0, 100)
   };
 }
 
@@ -424,13 +505,25 @@ function queueJob(rawJob, actor = 'system') {
 
 async function executePrintAttempt(job, attempt) {
   const printerName = resolvePrinterForJob(job);
-  let localFilePath;
+  const jobFileEntries = Array.isArray(job.fileEntries) && job.fileEntries.length > 0
+    ? job.fileEntries
+    : (
+      Array.isArray(job.fileUrls) && job.fileUrls.length > 0
+        ? job.fileUrls
+            .map((url) => (typeof url === 'string' && url.trim().length > 0 ? { url, copies: Number(job.copies || 1) } : null))
+            .filter((entry) => Boolean(entry))
+        : (job.fileUrl ? [{ url: job.fileUrl, copies: Number(job.copies || 1) }] : [])
+    );
 
   if (attempt === 1) {
     state.metrics.totalJobs += 1;
   }
 
-  await serverApi.reportJobUpdate(job.id, 'RECEIVED', { printerName, attempt });
+  if (jobFileEntries.length === 0) {
+    throw new Error('No file URLs available for this job');
+  }
+
+  await safeReportJobUpdate(job.id, 'RECEIVED', { printerName, attempt });
 
   const startedAtMs = Date.now();
 
@@ -443,8 +536,20 @@ async function executePrintAttempt(job, attempt) {
       updatedAt: new Date().toISOString()
     });
 
-    localFilePath = await downloadFile(job.fileUrl, job.id);
-    await printPdf(localFilePath, printerName, Number(job.copies || 1));
+    for (let index = 0; index < jobFileEntries.length; index += 1) {
+      const fileEntry = jobFileEntries[index];
+      const fileUrl = fileEntry.url;
+      const fileTag = `${job.id}-${index + 1}`;
+      let localFilePath;
+
+      try {
+        localFilePath = await downloadFile(fileUrl, fileTag);
+        const entryCopies = Number(fileEntry.copies || job.copies || 1);
+        await printPdf(localFilePath, printerName, Number.isFinite(entryCopies) && entryCopies > 0 ? entryCopies : 1);
+      } finally {
+        await cleanupFile(localFilePath);
+      }
+    }
 
     const latencyMs = Date.now() - startedAtMs;
 
@@ -471,7 +576,12 @@ async function executePrintAttempt(job, attempt) {
 
     addLog('info', 'Print completed', { jobId: job.id, printerName, attempt });
     addAudit('JOB_PRINTED', 'system', { jobId: job.id, printerName, attempt });
-    await serverApi.reportJobUpdate(job.id, 'PRINTED', { printerName, attempt, latencyMs });
+    await safeReportJobUpdate(job.id, 'PRINTED', {
+      printerName,
+      attempt,
+      latencyMs,
+      fileCount: jobFileEntries.length
+    });
     return;
   } catch (error) {
     const diagnostic = classifyError(error.message);
@@ -494,8 +604,6 @@ async function executePrintAttempt(job, attempt) {
     });
 
     throw error;
-  } finally {
-    await cleanupFile(localFilePath);
   }
 }
 
@@ -510,7 +618,7 @@ async function processJobWithRetry(job) {
     } catch (error) {
       lastError = error;
       if (attempt < maxAttempts) {
-        await serverApi.reportJobUpdate(job.id, 'RETRYING', { attempt, error: error.message });
+        await safeReportJobUpdate(job.id, 'RETRYING', { attempt, error: error.message });
       }
     }
   }
@@ -528,7 +636,7 @@ async function processJobWithRetry(job) {
 
   addNotification('PRINT_FAILED', `Job ${job.id} failed: ${diagnostic}`, 'error', { jobId: job.id });
   addAudit('JOB_FAILED', 'system', { jobId: job.id, diagnostic });
-  await serverApi.reportJobUpdate(job.id, 'FAILED', {
+  await safeReportJobUpdate(job.id, 'FAILED', {
     diagnostic,
     error: lastError?.message || 'Unknown error'
   });
@@ -560,19 +668,44 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.get('/api/connection', (_req, res) => {
-  res.json(serverApi.getConfig());
+  res.json({
+    ...serverApi.getConfig(),
+    defaultPrinterName: state.settings.defaultPrinterName,
+    availablePrinters: state.printers.map((printer) => printer.name)
+  });
 });
 
 app.post('/api/connection', (req, res) => {
+  const requestedDefaultPrinter = Object.prototype.hasOwnProperty.call(req.body || {}, 'defaultPrinterName')
+    ? String(req.body.defaultPrinterName || '').trim()
+    : null;
+
+  if (requestedDefaultPrinter !== null) {
+    if (!requestedDefaultPrinter) {
+      state.settings.defaultPrinterName = null;
+    } else {
+      const exists = state.printers.some((printer) => printer.name === requestedDefaultPrinter);
+      if (!exists) {
+        return res.status(400).json({ error: `Unknown printer: ${requestedDefaultPrinter}` });
+      }
+      state.settings.defaultPrinterName = requestedDefaultPrinter;
+    }
+  }
+
   const updated = serverApi.updateConfig(req.body || {});
   addAudit('SERVER_CONNECTION_UPDATED', req.authUser || 'dashboard-user', {
     serverUrl: updated.serverUrl,
     nodeEmail: updated.nodeEmail,
     pendingJobsPath: updated.pendingJobsPath,
     eventsPath: updated.eventsPath,
-    loginPath: updated.loginPath
+    loginPath: updated.loginPath,
+    defaultPrinterName: state.settings.defaultPrinterName
   });
-  res.json(updated);
+  res.json({
+    ...updated,
+    defaultPrinterName: state.settings.defaultPrinterName,
+    availablePrinters: state.printers.map((printer) => printer.name)
+  });
 });
 
 app.post('/api/connection/test', async (_req, res) => {
@@ -585,8 +718,10 @@ app.post('/api/connection/test', async (_req, res) => {
   return res.json(result);
 });
 
-app.get('/api/dashboard', (_req, res) => {
-  res.json(dashboardSnapshot());
+app.get('/api/dashboard', (req, res) => {
+  const jobsLimit = parsePositiveInt(req.query?.jobsLimit, 10, 100);
+  const jobsOffset = parsePositiveInt(req.query?.jobsOffset, 0);
+  res.json(dashboardSnapshot({ jobsLimit, jobsOffset }));
 });
 
 app.get('/api/printers', async (_req, res) => {
@@ -632,8 +767,22 @@ app.delete('/api/queue/:jobId', (req, res) => {
   return res.json({ ok: true });
 });
 
-app.get('/api/logs', (_req, res) => {
-  res.json({ logs: state.logs });
+app.get('/api/logs', (req, res) => {
+  const limit = parsePositiveInt(req.query?.limit, 10, 100);
+  const offset = parsePositiveInt(req.query?.offset, 0);
+  const logs = state.logs.slice(offset, offset + limit);
+  const nextOffset = offset + logs.length;
+
+  res.json({
+    logs,
+    page: {
+      offset,
+      limit,
+      total: state.logs.length,
+      hasMore: nextOffset < state.logs.length,
+      nextOffset
+    }
+  });
 });
 
 app.get('/api/audit', (_req, res) => {
@@ -730,20 +879,53 @@ app.post('/api/logout', async (req, res) => {
 });
 
 app.post('/api/jobs/print', async (req, res) => {
-  const { jobId, fileUrl, printerName, copies, userName, documentName, pages, color, paperSize, actor } =
+  const { jobId, fileUrl, fileUrls, file_urls, printerName, copies, userName, documentName, pages, color, paperSize, actor } =
     req.body || {};
 
-  if (!fileUrl) {
-    return res.status(400).json({ error: 'fileUrl is required' });
+  const normalizedFileUrls = Array.isArray(fileUrls)
+    ? fileUrls
+    : (Array.isArray(file_urls) ? file_urls : []);
+  const safeCopies = Number(copies || 1);
+  const finalFileEntries = normalizedFileUrls
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        const url = entry.trim();
+        if (!url) {
+          return null;
+        }
+        return { url, copies: Number.isFinite(safeCopies) && safeCopies > 0 ? safeCopies : 1 };
+      }
+
+      if (entry && typeof entry === 'object') {
+        const url = String(entry.url || '').trim();
+        if (!url) {
+          return null;
+        }
+        const perFileCopies = Number(entry.copies ?? safeCopies);
+        return {
+          url,
+          copies: Number.isFinite(perFileCopies) && perFileCopies > 0 ? perFileCopies : 1
+        };
+      }
+
+      return null;
+    })
+    .filter((entry) => Boolean(entry));
+
+  const primaryFileUrl = fileUrl || finalFileEntries[0]?.url || null;
+
+  if (!primaryFileUrl && finalFileEntries.length === 0) {
+    return res.status(400).json({ error: 'fileUrl or fileUrls is required' });
   }
 
   try {
     const queued = queueJob(
       {
       id: jobId || `manual-${Date.now()}`,
-      fileUrl,
+      fileUrl: primaryFileUrl,
+      fileUrls: finalFileEntries.length > 0 ? finalFileEntries : [{ url: primaryFileUrl, copies: Number.isFinite(safeCopies) && safeCopies > 0 ? safeCopies : 1 }],
       printerName,
-      copies: Number(copies || 1),
+      copies: Number.isFinite(safeCopies) && safeCopies > 0 ? safeCopies : 1,
       userName,
       documentName,
       pages,

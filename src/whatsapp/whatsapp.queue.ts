@@ -45,7 +45,8 @@ export class WhatsappQueueService {
                     job.data.message,
                     job.data.mediaUrl,
                     job.data.mediaContentType,
-                    job.data.interactiveData
+                    job.data.interactiveData,
+                    job.data.userName
                 );
                 job.finishedOn = Date.now();
                 this.completed.unshift(job);

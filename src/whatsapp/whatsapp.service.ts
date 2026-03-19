@@ -3,7 +3,7 @@ import { PhonepeService } from '../payment/phonepe/phonepe.service';
 import { CashfreeService } from '../payment/cashfree/cashfree.service';
 import axios from 'axios';
 import * as mammoth from 'mammoth';
-import { SupabaseStorageService } from '../storage/supabase-storage.service';
+import { R2Service } from '../r2/r2.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { WhatsappProvider } from './providers/whatsapp-provider.interface';
 import { TelegramProvider } from './providers/telegram.provider';
@@ -33,6 +33,7 @@ interface ChatState {
     cashfreeLink?: string;
     jobId?: string;
     sender?: string;
+    userName?: string;
     platform?: 'telegram' | 'meta' | 'twilio';
     useFlow?: boolean;
     startedAt?: number;
@@ -48,7 +49,7 @@ export class WhatsappService {
     constructor(
         @Inject(forwardRef(() => PhonepeService)) private readonly phonepeService: PhonepeService,
         @Inject(forwardRef(() => CashfreeService)) private readonly cashfreeService: CashfreeService,
-        private readonly supabaseStorage: SupabaseStorageService,
+        private readonly r2Storage: R2Service,
         private readonly prisma: PrismaService,
         private readonly telegramProvider: TelegramProvider,
         private readonly metaProvider: MetaProvider,
@@ -208,7 +209,7 @@ export class WhatsappService {
             try {
                 const extension = this.mimeToExtension(mime);
                 fileName = `upload_${Date.now()}_${Math.floor(Math.random() * 1000)}.${extension}`;
-                supabaseUrl = await this.supabaseStorage.uploadFile(buffer, fileName, mime);
+                supabaseUrl = await this.r2Storage.uploadFile(fileName, buffer, mime);
             } catch (storageErr) {
                 this.logger.warn(`Failed to upload to Supabase: ${storageErr.message}`);
             }
@@ -232,13 +233,16 @@ export class WhatsappService {
         }
     }
 
-    async handleIncomingMessage(sender: string, message: string, mediaUrl?: string, mediaContentType?: string, interactiveData?: any): Promise<string | null> {
+    async handleIncomingMessage(sender: string, message: string, mediaUrl?: string, mediaContentType?: string, interactiveData?: any, userName?: string): Promise<string | null> {
         this.logger.log(`Received message from ${sender}: ${message}`);
 
         let session = await this.loadSession(sender);
 
         if (!session) {
-            session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
+            session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined };
+            await this.saveSession(sender, session);
+        } else if (String(userName || '').trim() && !session.userName) {
+            session.userName = String(userName || '').trim();
             await this.saveSession(sender, session);
         }
 
@@ -272,7 +276,7 @@ export class WhatsappService {
             // ─── Global cancel/reset: works at ANY step ───────────────
             if (normalizedMessage === 'cancel' || normalizedMessage === 'reset' || normalizedMessage === 'restart' || normalizedMessage === '/cancel' || normalizedMessage === '/reset' || normalizedMessage === '/start') {
                 await this.deleteSession(sender);
-                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now() };
+                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined };
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
                 await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.\n\nTo select a shop, type: shop <shop_code>');
@@ -351,6 +355,7 @@ export class WhatsappService {
                 const preservedNodeId = session.nodeId;
                 const preservedNodeCode = session.nodeCode;
                 const preservedPlatform = session.platform;
+                const preservedUserName = session.userName;
 
                 session = {
                     step: 'AWAITING_FILE',
@@ -359,6 +364,7 @@ export class WhatsappService {
                     nodeId: preservedNodeId,
                     nodeCode: preservedNodeCode,
                     platform: preservedPlatform,
+                    userName: preservedUserName,
                 };
                 await this.saveSession(sender, session);
 
@@ -836,7 +842,7 @@ export class WhatsappService {
                         const urlParts = file.url.split('/');
                         const filename = urlParts[urlParts.length - 1];
                         if (filename) {
-                            await this.supabaseStorage.deleteFile(filename);
+                            await this.r2Storage.deleteFile(filename);
                             this.logger.log(`Cleaned up Supabase file: ${filename}`);
                         }
                     } catch (e) {
