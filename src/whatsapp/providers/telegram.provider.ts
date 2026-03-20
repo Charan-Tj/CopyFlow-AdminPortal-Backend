@@ -132,13 +132,13 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         if (isNaN(chatId) || !TelegramProvider.bot) return;
 
         const buttons = nodes.map(n =>
-            [Markup.button.callback(`🏪 ${n.name} (${n.node_code})`, `shop_${n.node_code}`)]
+            [Markup.button.callback(`${n.name} (${n.node_code})`, `shop_${n.node_code}`)]
         );
 
         try {
             await TelegramProvider.bot.telegram.sendMessage(
                 chatId,
-                '👋 Welcome to CopyFlow!\n\nSelect your print shop to get started:',
+                'Welcome to CopyFlow!\n\nSelect your print shop to get started:',
                 Markup.inlineKeyboard(buttons)
             );
         } catch (error: any) {
@@ -157,11 +157,11 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         try {
             await TelegramProvider.bot.telegram.sendMessage(
                 chatId,
-                '📱 *One last step!*\n\nWe need your phone number to generate the payment link.\n\nTap the button below to share it securely:',
+                '*One last step!*\n\nWe need your phone number to generate the payment link.\n\nTap the button below to share it securely:',
                 {
                     parse_mode: 'Markdown',
                     reply_markup: {
-                        keyboard: [[{ text: '📞 Share My Phone Number', request_contact: true }]],
+                        keyboard: [[{ text: 'Share My Phone Number', request_contact: true }]],
                         resize_keyboard: true,
                         one_time_keyboard: true,
                     },
@@ -171,7 +171,7 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
             this.logger.error(`Error sending Telegram phone request: ${error.message}`);
             // Fallback: ask them to type it
             await this.sendTextMessage(to,
-                '📱 Please type your 10-digit mobile number so we can generate your payment link (e.g. 9876543210):'
+                'Please type your 10-digit mobile number so we can generate your payment link (e.g. 9876543210):'
             );
         }
     }
@@ -191,9 +191,9 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         const chatId = this.formatTo(to);
         if (isNaN(chatId) || !TelegramProvider.bot) return;
 
-        let body = `⚙️ *Print Settings*\n\nUse the buttons below to configure your print job.`;
+        let body = `*Print Settings*\n\nUse the buttons below to configure your print job.`;
         if (isFinal) {
-            body = `✅ *Print Settings Confirmed*\n\nCopies: ${copies}\nColor: ${isColor ? 'Yes' : 'No'}\nDouble-sided: ${isDouble ? 'Yes' : 'No'}`;
+            body = `*Print Settings Confirmed*\n\nCopies: ${copies}\nColor: ${isColor ? 'Yes' : 'No'}\nDouble-sided: ${isDouble ? 'Yes' : 'No'}`;
         }
 
         const buttons = [
@@ -203,11 +203,11 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 Markup.button.callback('➕', 'tg_mat_inc'),
             ],
             [
-                Markup.button.callback(!isColor ? '☑️ Black & White' : '⬜ Black & White', 'tg_mat_bw'),
+                Markup.button.callback(isColor ? '⬜ Black & White' : '☑️ Black & White', 'tg_mat_bw'),
                 Markup.button.callback(isColor ? '☑️ Color' : '⬜ Color', 'tg_mat_col'),
             ],
             [
-                Markup.button.callback(!isDouble ? '☑️ Single Sided' : '⬜ Single Sided', 'tg_mat_ss'),
+                Markup.button.callback(isDouble ? '⬜ Single Sided' : '☑️ Single Sided', 'tg_mat_ss'),
                 Markup.button.callback(isDouble ? '☑️ Double Sided' : '⬜ Double Sided', 'tg_mat_ds'),
             ]
         ];
