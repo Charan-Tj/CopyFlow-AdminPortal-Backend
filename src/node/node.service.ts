@@ -125,13 +125,25 @@ export class NodeService {
         };
     }
 
-    async getRecentJobs(nodeId: string, limit = 50) {
+    async getRecentJobs(nodeId: string, limit = 50, from?: string, to?: string) {
         const take = Math.min(200, Math.max(1, Number(limit) || 50));
+        const parsedFrom = from ? new Date(from) : null;
+        const parsedTo = to ? new Date(to) : null;
+        const hasFrom = parsedFrom instanceof Date && Number.isFinite(parsedFrom.getTime());
+        const hasTo = parsedTo instanceof Date && Number.isFinite(parsedTo.getTime());
 
         const jobs = await this.prisma.printJob.findMany({
             where: {
                 node_id: nodeId,
-                status: { in: ['PRINTED', 'FAILED'] }
+                status: { in: ['PRINTED', 'FAILED'] },
+                ...(hasFrom || hasTo
+                    ? {
+                        updatedAt: {
+                            ...(hasFrom ? { gte: parsedFrom as Date } : {}),
+                            ...(hasTo ? { lt: parsedTo as Date } : {})
+                        }
+                    }
+                    : {})
             },
             orderBy: {
                 updatedAt: 'desc'
