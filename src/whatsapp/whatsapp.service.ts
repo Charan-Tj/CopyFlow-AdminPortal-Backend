@@ -465,20 +465,13 @@ export class WhatsappService {
                         take: 10,
                     });
 
-                    if (activeNodes.length > 0 && sender.startsWith('telegram:')) {
-                        await this.telegramProvider.sendShopSelector(sender, activeNodes);
+                    if (activeNodes.length > 0) {
+                        await this.sendTextMessage(sender, `❌ Shop code "${shopCode}" was not found.`);
+                        await this.resolveProvider(sender).sendShopSelector(sender, activeNodes);
                     } else {
-                        let msg = `Shop code "${shopCode}" was not found.`;
-                        if (activeNodes.length > 0) {
-                            msg += '\n\nAvailable shops:';
-                            for (const n of activeNodes) {
-                                msg += `\n- ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
-                            }
-                            msg += '\n\nReply: shop <code> to select one.';
-                        }
-                        await this.sendTextMessage(sender, msg);
+                        await this.sendTextMessage(sender, `❌ Shop code "${shopCode}" was not found and there are no active shops available right now.`);
                         await this.sendButtonMessage(sender,
-                            'Need help selecting a shop?',
+                            'Need help?',
                             [{ id: 'help', label: 'Help' }, { id: 'cancel', label: 'Start Over' }]
                         );
                     }
@@ -496,24 +489,8 @@ export class WhatsappService {
 
                 if (activeNodes.length === 0) {
                     await this.sendTextMessage(sender, 'No shops are currently available. Please try again later.');
-                } else if (sender.startsWith('telegram:')) {
-                    await this.telegramProvider.sendShopSelector(sender, activeNodes);
                 } else {
-                    // WhatsApp: send shop list as a separate text message, then a button prompt
-                    let msg = `*Available Print Shops* (${activeNodes.length})`;
-                    for (const n of activeNodes) {
-                        msg += `\n\n*${n.node_code}* — ${n.name}\n${n.college}, ${n.city}`;
-                    }
-                    msg += `\n\nReply: shop <code>   e.g. shop ${activeNodes[0].node_code}`;
-                    if (session.nodeId) {
-                        msg += `\n\nCurrently selected: *${session.nodeCode}*`;
-                    }
-                    await this.sendTextMessage(sender, msg);
-                    await this.sendButtonMessage(sender,
-                        'Tap a shop code above or reply with: shop <code>',
-                        [{ id: 'help', label: 'Help' }, { id: 'cancel', label: 'Start Over' }],
-                        'Select Your Print Shop'
-                    );
+                    await this.resolveProvider(sender).sendShopSelector(sender, activeNodes);
                 }
                 return null;
             }
@@ -793,6 +770,64 @@ export class WhatsappService {
                     this.logger.error(`Send error: ${err.message}`);
                     return 'Welcome to CopyFlow! Send your files (PDF, Word, or image) to get started.';
                 }
+            }
+
+            if (session.step === 'AWAITING_TG_MATRIX' && sender.startsWith('telegram:')) {
+                const parts = normalizedMessage.split('_');
+                if (parts[0] !== 'tg' || parts[1] !== 'mat') {
+                    if (normalizedMessage === '/cancel' || normalizedMessage === '/reset' || normalizedMessage === 'cancel') {
+                        // Handled by generic commands above, but if it fell through, don't block
+                        return null;
+                    }
+                    return 'Please use the buttons above to configure your print settings & confirm.';
+                }
+
+                const action = parts[2];
+                let shouldUpdateMsg = false;
+                const msgId = interactiveData?.messageId;
+
+                const safeCopies = session.copies ?? 1;
+
+                if (action === 'dec' && safeCopies > 1) {
+                    session.copies = safeCopies - 1;
+                    shouldUpdateMsg = true;
+                } else if (action === 'inc' && safeCopies < 99) {
+                    session.copies = safeCopies + 1;
+                    shouldUpdateMsg = true;
+                } else if (action === 'bw' && session.color === true) {
+                    session.color = false;
+                    shouldUpdateMsg = true;
+                } else if (action === 'col' && session.color === false) {
+                    session.color = true;
+                    shouldUpdateMsg = true;
+                } else if (action === 'ss' && session.sides === 'double') {
+                    session.sides = 'single';
+                    shouldUpdateMsg = true;
+                } else if (action === 'ds' && session.sides === 'single') {
+                    session.sides = 'double';
+                    shouldUpdateMsg = true;
+                } else if (action === 'submit') {
+                    session.step = 'AWAITING_PHONE'; 
+                    const pricePerPage = session.color ? 10 : 2;
+                    session.price = (session.pages || 1) * safeCopies * pricePerPage;
+                    await this.saveSession(sender, session);
+                    
+                    if (msgId) {
+                        await this.telegramProvider.sendSettingsMatrix(sender, safeCopies, !!session.color, session.sides === 'double', true, msgId, true);
+                    }
+                    
+                    await this.sendTypingIndicator(sender);
+                    await this.telegramProvider.sendPhoneRequest(sender);
+                    return null;
+                }
+
+                if (shouldUpdateMsg) {
+                    await this.saveSession(sender, session);
+                    if (msgId) {
+                        await this.telegramProvider.sendSettingsMatrix(sender, session.copies!, !!session.color, session.sides === 'double', true, msgId);
+                    }
+                }
+                return null;
             }
 
             if (session.step === 'AWAITING_COPIES') {

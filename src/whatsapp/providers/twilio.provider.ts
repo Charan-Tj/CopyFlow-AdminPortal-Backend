@@ -87,6 +87,16 @@ export class TwilioProvider implements WhatsappProvider, OnModuleInit {
         }
     }
 
+    async sendShopSelector(to: string, nodes: { node_code: string; name: string; college: string; city: string }[]): Promise<void> {
+        // Twilio wrapper currently uses basic text formatting for Shop Selector
+        let msg = `*Available Print Shops* (${nodes.length})`;
+        for (const n of nodes) {
+            msg += `\n\n*${n.node_code}* — ${n.name}\n${n.college}, ${n.city}`;
+        }
+        msg += `\n\nReply: shop <code>   e.g. shop ${nodes[0]?.node_code || 'TEST01'}`;
+        await this.sendTextMessage(to, msg);
+    }
+
     async sendTextMessage(to: string, body: string): Promise<void> {
         const envFrom = process.env.TWILIO_PHONE_NUMBER || '+14155238886';
         const from = envFrom.includes('whatsapp:') ? envFrom : `whatsapp:${envFrom}`;
