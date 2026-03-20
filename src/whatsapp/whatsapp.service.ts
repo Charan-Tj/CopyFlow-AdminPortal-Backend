@@ -1202,8 +1202,21 @@ export class WhatsappService {
             session.jobId = referenceId;
             session.sender = sender;
             const paymentSource = sender.startsWith('telegram:') ? 'telegram' : 'whatsapp';
-            // Strip any platform prefix (whatsapp:, telegram:, etc.) to get a clean phone number
-            const cleanedPhone = sender.replace(/^(whatsapp:|telegram:)/, '');
+
+            // For Telegram, the sender is a numeric chat ID — not a phone number.
+            // Payment gateways need a phone; use a placeholder so they don't receive 'null'.
+            let cleanedPhone = sender.replace(/^(whatsapp:|telegram:)/, '').replace('+', '');
+            if (!/^[6-9]\d{9}$/.test(cleanedPhone)) {
+                // Not a valid Indian mobile number — substitute a gateway-safe placeholder
+                cleanedPhone = '9999999999';
+                this.logger.warn(`Sender ${sender} has no valid phone — using placeholder for payment gateway`);
+            }
+
+            // Guard: price must be a positive number before calling any gateway
+            const paymentAmount = session.price && session.price > 0 ? session.price : null;
+            if (!paymentAmount) {
+                throw new Error('Order total is ₹0 or not calculated. Please go back and re-confirm your order.');
+            }
 
             await this.sendTypingIndicator(sender);
             const isColorStr = session.color ? 'Color' : 'Black and White';
@@ -1219,7 +1232,7 @@ export class WhatsappService {
             try {
                 this.logger.log('Creating payment link via phonepeService...');
                 const phonepeLink = await this.phonepeService.createPaymentLink(
-                    session.price as number,
+                    paymentAmount,
                     referenceId,
                     cleanedPhone,
                     paymentSource
@@ -1239,7 +1252,7 @@ export class WhatsappService {
             try {
                 this.logger.log('Creating payment link via cashfreeService...');
                 const cashfreeLink = await this.cashfreeService.createPaymentLink(
-                    session.price as number,
+                    paymentAmount,
                     referenceId,
                     cleanedPhone,
                     description,
