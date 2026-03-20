@@ -183,6 +183,20 @@ export class WhatsappService {
         await this.resolveProvider(to).sendTextMessage(to, body);
     }
 
+    /**
+     * Send a button message via the correct provider.
+     * Max 3 buttons. On WhatsApp each label must be ≤20 chars.
+     */
+    private async sendButtonMessage(
+        to: string,
+        body: string,
+        buttons: { id: string; label: string }[],
+        header?: string,
+        footer?: string,
+    ) {
+        await this.resolveProvider(to).sendButtonMessage(to, body, buttons, header, footer);
+    }
+
     private async sendTypingIndicator(to: string) {
         await this.resolveProvider(to).sendTypingIndicator(to);
     }
@@ -246,7 +260,8 @@ export class WhatsappService {
         let session = await this.loadSession(sender);
 
         if (!session) {
-            session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined };
+            const platform = sender.startsWith('telegram:') ? 'telegram' : sender.startsWith('whatsapp:') ? 'meta' : undefined;
+            session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined, platform };
             await this.saveSession(sender, session);
         } else if (String(userName || '').trim() && !session.userName) {
             session.userName = String(userName || '').trim();
@@ -256,27 +271,61 @@ export class WhatsappService {
         const normalizedMessage = message.trim().toLowerCase();
 
         try {
-            // ─── Help command ───────────────
+            // ─── Help / Menu command ─────────────────────────────────────────
             if (normalizedMessage === 'help' || normalizedMessage === '/help' || normalizedMessage === 'menu') {
                 await this.sendTypingIndicator(sender);
-                await this.sendTextMessage(sender,
-                    // HCI: Zero assumption — tell user exactly where they are + what they can do
-                    `📖 *CopyFlow Help*\n\n` +
-                    `📍 *You are here:* Step ${this.getStepLabel(session.step)}\n\n` +
-                    `🖨️ *How to print:*\n` +
-                    `1. Send your files (PDF/Word/image)\n` +
-                    `2. Type *DONE* when finished uploading\n` +
-                    `3. Choose copies, color, and sides\n` +
-                    `4. Review order summary & confirm\n` +
-                    `5. Pay via the link — prints automatically!\n\n` +
-                    `📋 *Commands:*\n` +
-                    `MENU — Show this help\n` +
-                    `SHOPS — List print shops near you\n` +
-                    `CANCEL — Abandon current job & start over\n` +
-                    `RETRY — Refresh expired payment link\n` +
-                    `DONE — Finish uploading files\n\n` +
-                    `🏪 *Select a shop:*\n` +
-                    `Type: shop <code>  e.g. shop TESTNODE1`
+
+                if (session.step === 'AWAITING_PAYMENT') {
+                    // Payment-specific help — always surface RETRY prominently
+                    let linksText = '';
+                    if (session.phonepeLink) linksText += `🔗 PhonePe: ${session.phonepeLink}\n`;
+                    if (session.cashfreeLink) linksText += `🔗 Cashfree: ${session.cashfreeLink}\n`;
+                    if (session.paymentLink && !session.phonepeLink && !session.cashfreeLink) {
+                        linksText += `🔗 Link: ${session.paymentLink}\n`;
+                    }
+                    await this.sendButtonMessage(
+                        sender,
+                        `📍 Waiting for payment of *₹${session.price || '?'}*\n\n${linksText ? linksText + '\n' : ''}Once payment is confirmed, printing starts automatically.`,
+                        [
+                            { id: 'retry', label: '🔄 Refresh Link' },
+                            { id: 'cancel', label: '❌ Cancel Order' },
+                        ],
+                        '💳 Payment Help',
+                        'Link expired? Tap Refresh Link'
+                    );
+                    return null;
+                }
+
+                if (session.step === 'AWAITING_CONFIRMATION') {
+                    // Re-show the order summary with action buttons (mirrors the confirm step)
+                    const pricePerPage = session.color ? 10 : 2;
+                    const summary = this.generateOrderSummary(session, pricePerPage);
+                    await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
+                    return null;
+                }
+
+                if (session.step === 'AWAITING_FILE') {
+                    const hasFiles = session.files.length > 0;
+                    const body = hasFiles
+                        ? `📂 You have *${session.files.length}* file${session.files.length > 1 ? 's' : ''} uploaded.\n\nTap *Done* to continue, or send more files.`
+                        : `Send a PDF, Word doc, or image to start printing.\n\n1️⃣ Upload files\n2️⃣ Tap Done\n3️⃣ Choose copies, color & sides\n4️⃣ Pay → prints automatically!`;
+                    const buttons: { id: string; label: string }[] = hasFiles
+                        ? [{ id: 'done_uploading', label: '✅ Done Uploading' }, { id: 'shops', label: '🏪 Select Shop' }, { id: 'cancel', label: '❌ Cancel' }]
+                        : [{ id: 'shops', label: '🏪 Select Shop' }, { id: 'cancel', label: '❌ Start Over' }];
+                    await this.sendButtonMessage(sender, body, buttons, '📖 CopyFlow Help', `Step: ${this.getStepLabel(session.step)}`);
+                    return null;
+                }
+
+                // Generic help for mid-flow steps
+                await this.sendButtonMessage(
+                    sender,
+                    `📍 *You are at:* ${this.getStepLabel(session.step)}\n\nContinue answering the prompts above, or use the buttons below.`,
+                    [
+                        { id: 'shops', label: '🏪 Shops' },
+                        { id: 'cancel', label: '❌ Start Over' },
+                    ],
+                    '📖 CopyFlow Help',
+                    'Type RETRY to refresh payment link'
                 );
                 return null;
             }
@@ -284,7 +333,8 @@ export class WhatsappService {
             // ─── Global cancel/reset: works at ANY step ───────────────
             if (normalizedMessage === 'cancel' || normalizedMessage === 'reset' || normalizedMessage === 'restart' || normalizedMessage === '/cancel' || normalizedMessage === '/reset' || normalizedMessage === '/start') {
                 await this.deleteSession(sender);
-                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined };
+                const platform = sender.startsWith('telegram:') ? 'telegram' : sender.startsWith('whatsapp:') ? 'meta' : undefined;
+                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined, platform };
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
 
@@ -301,7 +351,16 @@ export class WhatsappService {
                     }
                 }
 
-                await this.sendTextMessage(sender, '🔄 Session reset! Send your files (PDF/Word/image) to start a new print job.\n\nType: shop <code> to select a shop. Type: shops to list all shops.\n\n💡 Type HELP anytime if you get stuck.');
+                await this.sendButtonMessage(
+                    sender,
+                    '🔄 Session reset! Send your files (PDF, Word, or image) to start a new print job.',
+                    [
+                        { id: 'shops', label: '🏪 Browse Shops' },
+                        { id: 'help', label: '❓ Help' },
+                    ],
+                    '✅ Fresh Start',
+                    'Select a shop first, then upload your files'
+                );
                 return null;
             }
 
@@ -334,15 +393,24 @@ export class WhatsappService {
                         take: 10,
                     });
 
-                    let msg = `❌ Shop code "${shopCode}" not found.`;
-                    if (activeNodes.length > 0) {
-                        msg += '\n\n📍 Available shops:';
-                        for (const n of activeNodes) {
-                            msg += `\n• ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
+                    if (activeNodes.length > 0 && sender.startsWith('telegram:')) {
+                        // Telegram: offer clickable shop buttons directly
+                        await this.telegramProvider.sendShopSelector(sender, activeNodes);
+                    } else {
+                        let msg = `❌ Shop code "${shopCode}" not found.`;
+                        if (activeNodes.length > 0) {
+                            msg += '\n\n📍 Available shops:';
+                            for (const n of activeNodes) {
+                                msg += `\n• ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
+                            }
+                            msg += '\n\nType: shop <code> to select one.';
                         }
-                        msg += '\n\nType: shop <code> to select one.';
+                        await this.sendTextMessage(sender, msg);
+                        await this.sendButtonMessage(sender,
+                            'Need help selecting a shop?',
+                            [{ id: 'help', label: '❓ Help' }, { id: 'cancel', label: '❌ Start Over' }]
+                        );
                     }
-                    await this.sendTextMessage(sender, msg);
                 }
                 return null;
             }
@@ -356,17 +424,24 @@ export class WhatsappService {
                 });
 
                 if (activeNodes.length === 0) {
-                    await this.sendTextMessage(sender, '😕 No shops are currently available.');
+                    await this.sendTextMessage(sender, '😕 No shops are currently available. Try again later.');
+                } else if (sender.startsWith('telegram:')) {
+                    // Telegram: full inline keyboard of shops
+                    await this.telegramProvider.sendShopSelector(sender, activeNodes);
                 } else {
-                    let msg = '📍 Available shops:';
+                    // Meta / Twilio: text list + a contextual button
+                    let msg = `📍 *Available Shops* (${activeNodes.length}):\n`;
                     for (const n of activeNodes) {
-                        msg += `\n• ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
+                        msg += `\n• *${n.node_code}* — ${n.name}\n  ${n.college}, ${n.city}`;
                     }
-                    msg += '\n\nType: shop <code> to select one.';
+                    msg += '\n\nReply: shop <code>  e.g. shop TESTNODE1';
                     if (session.nodeId) {
-                        msg += `\n\n✅ Currently selected: ${session.nodeCode}`;
+                        msg += `\n\n✅ Currently selected: *${session.nodeCode}*`;
                     }
-                    await this.sendTextMessage(sender, msg);
+                    await this.sendButtonMessage(sender, msg,
+                        [{ id: 'help', label: '❓ Help' }, { id: 'cancel', label: '❌ Start Over' }],
+                        '🏪 Select Your Print Shop'
+                    );
                 }
                 return null;
             }
@@ -392,9 +467,12 @@ export class WhatsappService {
 
                 if (!mediaUrl && normalizedMessage !== 'done' && normalizedMessage !== 'done_uploading') {
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(
+                    await this.sendButtonMessage(
                         sender,
-                        `✅ Previous order completed. Send your next file to start a new print job.${preservedNodeCode ? `\n🏪 Shop: ${preservedNodeCode}` : ''}`,
+                        `Send your next file (PDF, Word, or image) to start a new print job.${preservedNodeCode ? `\n\n🏪 Shop: *${preservedNodeCode}*` : ''}`,
+                        [{ id: 'shops', label: '🏪 Change Shop' }, { id: 'help', label: '❓ Help' }],
+                        '✅ Previous order complete!',
+                        'Your shop selection is saved'
                     );
                     return null;
                 }
@@ -475,11 +553,12 @@ export class WhatsappService {
                 // User taps "Done" — move to copies selection
                 if (normalizedMessage === 'done' || normalizedMessage === 'done_uploading') {
                     if (session.files.length === 0) {
-                        // HCI: Graceful fallback — don't dead-end, tell them exactly what to do
-                        await this.sendTextMessage(sender,
-                            `⚠️ You haven't uploaded any files yet.\n\n` +
-                            `📎 Please send a PDF, Word document, or image first.\n\n` +
-                            `💡 Type *MENU* if you need help.`
+                        // HCI: Graceful fallback — don't dead-end, show a button to browse shops
+                        await this.sendButtonMessage(
+                            sender,
+                            `📤 Please send a PDF, Word document, or image first.`,
+                            [{ id: 'shops', label: '🏪 Browse Shops' }, { id: 'cancel', label: '❌ Start Over' }],
+                            `⚠️ No files uploaded yet`
                         );
                         return null;
                     }
@@ -500,11 +579,7 @@ export class WhatsappService {
                     session.step = 'AWAITING_COPIES';
                     await this.saveSession(sender, session);
                     await this.sendTypingIndicator(sender);
-                    // HCI: Status update — confirm receipt before asking next question
-                    await this.sendTextMessage(sender,
-                        `✅ Got it! ${session.files.length} file${session.files.length > 1 ? 's' : ''}, ${session.pages} page${(session.pages || 1) > 1 ? 's' : ''} total.\n\n` +
-                        `*Step 2 of 4:* How many copies do you need?`
-                    );
+                    // cf_copies_list message already includes the step header "Step 2 of 4"
                     await this.sendContentMessage(sender, 'cf_copies_list');
                     return null;
                 }
@@ -516,8 +591,32 @@ export class WhatsappService {
                         (session._pendingUrls || []).includes(mediaUrl);
 
                     if (alreadyQueued) {
-                        await this.sendTextMessage(sender,
-                            '⚠️ Looks like you already sent this file. Send a different file or tap "Done" to continue.'
+                        await this.sendButtonMessage(
+                            sender,
+                            'Looks like you already sent this file. Send a different file or tap Done to continue.',
+                            [{ id: 'done_uploading', label: '✅ Done Uploading' }],
+                            '⚠️ Duplicate File'
+                        );
+                        return null;
+                    }
+
+                    // Issue 12: Maximum files and pages limit
+                    const currentTotalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
+                    if (session.files.length >= 17) {
+                        await this.sendButtonMessage(
+                            sender,
+                            `You've reached the maximum of 17 files. Tap *Done* to print what you have, or *Cancel* to start over.`,
+                            [{ id: 'done_uploading', label: '✅ Done' }, { id: 'cancel', label: '❌ Cancel' }],
+                            '⚠️ File limit reached'
+                        );
+                        return null;
+                    }
+                    if (currentTotalPages >= 717) {
+                        await this.sendButtonMessage(
+                            sender,
+                            `You've reached the maximum of 717 pages (${currentTotalPages} so far). Tap *Done* to print what you have.`,
+                            [{ id: 'done_uploading', label: '✅ Done' }, { id: 'cancel', label: '❌ Cancel' }],
+                            '⚠️ Page limit reached'
                         );
                         return null;
                     }
@@ -533,6 +632,14 @@ export class WhatsappService {
                     await this.sendTypingIndicator(sender);
                     const { pages, supabaseUrl, fileName } = await this.getPageCount(sender, mediaUrl, mediaContentType);
 
+                    // Issue 16: Notify user if R2/Supabase upload failed
+                    if (!supabaseUrl) {
+                        this.logger.warn(`R2 upload failed for ${sender}, using temporary URL`);
+                        await this.sendTextMessage(sender,
+                            '⚠️ Note: File uploaded with temporary storage. Please complete your order soon.'
+                        );
+                    }
+
                     const fileEntry: UploadedFile = {
                         url: supabaseUrl || mediaUrl,
                         pages,
@@ -545,42 +652,74 @@ export class WhatsappService {
                     const totalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
                     const fileCount = session.files.length;
 
-                    // HCI: Status update — confirm file receipt immediately
+                    // HCI: Single combined button message — no separate nextHint text needed
                     await this.sendTypingIndicator(sender);
                     await this.sendContentMessage(sender, 'cf_file_uploaded', {
                         fileNum,
                         pages,
                         totalPages,
                         fileCount,
+                        hasShop: !!session.nodeId,
                     });
-                    // HCI: Progressive disclosure — tell them exactly what to do next
-                    const nextHint = session.nodeId
-                        ? `\n\n📌 Send another file, or type *DONE* to continue.`
-                        : `\n\n📌 Send another file, or type *DONE* to continue.\n🏪 Don't forget to select a shop! Type: SHOPS`;
-                    await this.sendTextMessage(sender, nextHint);
+                    // If no shop selected yet, remind with a button
+                    if (!session.nodeId) {
+                        await this.sendButtonMessage(
+                            sender,
+                            '⚠️ You haven\'t selected a print shop yet!',
+                            [{ id: 'shops', label: '🏪 Browse Shops' }],
+                            undefined,
+                            'Select a shop before tapping Done'
+                        );
+                    }
                     return null;
                 }
 
-                // First message — welcome (HCI: Zero assumption — tell them exactly what to do)
+                // Scenario 1 fix: welcome-back with buttons, or fresh welcome with shop-selector button
                 try {
                     await this.sendTypingIndicator(sender);
-                    const shopLine = session.nodeId
-                        ? `\n🏪 Selected shop: *${session.nodeCode}*`
-                        : `\n\n🏪 *Step 0 of 4:* First, select your print shop:\n   Type: shop <code>  e.g. shop TESTNODE1\n   Or type: SHOPS to see all available shops`;
-                    await this.sendTextMessage(sender,
-                        `👋 Welcome to *CopyFlow* — Instant Campus Printing!\n\n` +
+
+                    if (session.files.length > 0) {
+                        // Returning user who already uploaded files — show status + buttons
+                        const totalPages = session.files.reduce((sum, f) => sum + f.pages, 0);
+                        const shopFooter = session.nodeId
+                            ? `Shop: ${session.nodeCode}`
+                            : 'Don\'t forget to select a shop!';
+                        await this.sendButtonMessage(
+                            sender,
+                            `📂 You have *${session.files.length} file${session.files.length > 1 ? 's' : ''}* uploaded (${totalPages} page${totalPages > 1 ? 's' : ''} total).\n\nTap *Done* to continue, or send more files.`,
+                            [
+                                { id: 'done_uploading', label: '✅ Done Uploading' },
+                                { id: 'shops', label: '🏪 Change Shop' },
+                                { id: 'cancel', label: '❌ Start Over' },
+                            ],
+                            '👋 Welcome back!',
+                            shopFooter
+                        );
+                        return null;
+                    }
+
+                    // First-time / fresh session welcome
+                    const shopFooter = session.nodeId
+                        ? `Selected shop: ${session.nodeCode}`
+                        : 'Tap "Browse Shops" to pick your print shop first';
+                    await this.sendButtonMessage(
+                        sender,
                         `Here's how it works:\n` +
-                        `1️⃣ Send your file(s) — PDF, Word, or image\n` +
-                        `2️⃣ Type *DONE* when all files are uploaded\n` +
-                        `3️⃣ Choose copies, color & sides\n` +
-                        `4️⃣ Pay & your files print automatically ✅\n` +
-                        `${shopLine}\n\n` +
-                        `💡 Type *MENU* anytime for help.`
+                        `1️⃣ Select your shop\n` +
+                        `2️⃣ Upload your files (PDF/Word/image)\n` +
+                        `3️⃣ Tap *Done* → choose copies, color & sides\n` +
+                        `4️⃣ Pay → files print automatically! ✅`,
+                        [
+                            { id: 'shops', label: '🏪 Browse Shops' },
+                            { id: 'help', label: '❓ Help' },
+                        ],
+                        '👋 Welcome to CopyFlow!',
+                        shopFooter
                     );
                     return null;
                 } catch (err) {
                     this.logger.error(`Send error: ${err.message}`);
-                    return 'Welcome to CopyFlow! Send your files (PDF/Word/image) to get started. Type MENU for help.';
+                    return 'Welcome to CopyFlow! Send your files (PDF/Word/image) to get started.';
                 }
             }
 
@@ -606,10 +745,15 @@ export class WhatsappService {
                     await this.saveSession(sender, session);
                     try {
                         await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, 'How many copies? Please type a number (e.g. 5):');
+                        await this.sendButtonMessage(
+                            sender,
+                            'Type a number between 1 and 99 (e.g. *5*):',
+                            [{ id: 'cancel', label: '❌ Cancel' }],
+                            '🔢 How many copies?'
+                        );
                         return null;
                     } catch (err) {
-                        return 'How many copies? Please type a number:';
+                        return 'How many copies? Please type a number (1-99):';
                     }
                 }
 
@@ -644,8 +788,7 @@ export class WhatsappService {
                 session.step = 'AWAITING_COLOR';
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
-                // HCI: Status update — echo choice, then ask next single question
-                await this.sendTextMessage(sender, `✅ ${copies} ${copies === 1 ? 'copy' : 'copies'} selected.\n\n*Step 3 of 4:* Choose print color:`);
+                // Skip a separate status text — the color button message header says "Step 3 of 4"
                 await this.sendContentMessage(sender, 'cf_color_quickrep');
                 return null;
             }
@@ -667,11 +810,10 @@ export class WhatsappService {
                     return null;
                 }
 
-                session.step = 'AWAITING_SIDES';
+                session.step = 'AWAITING_CONFIRMATION';
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
-                // HCI: Status update — echo choice
-                await this.sendTextMessage(sender, `✅ ${session.color ? '🎨 Color' : '⬛ Black & White'} selected.\n\n*Step 4 of 4:* Choose print sides:`);
+                // Skip separate status text — sides button message header says "Step 4 of 4"
                 await this.sendContentMessage(sender, 'cf_sides_quickrep');
                 return null;
             }
@@ -699,24 +841,19 @@ export class WhatsappService {
                 await this.saveSession(sender, session);
                 // HCI: Confirmation before money — always show full summary
                 await this.sendTypingIndicator(sender);
-                await this.sendTextMessage(sender, `✅ ${session.sides === 'double' ? 'Double' : 'Single'}-sided selected.\n\n🔍 *Please review your order before paying:*`);
+
+                // Issue 13: Warn for large orders — embed in the same confirmation button message
+                const priceTag = session.price > 2000
+                    ? `\n\n⚠️ *Large order:* Total is ₹${session.price}. Review carefully before paying.`
+                    : '';
+
                 const summary = this.generateOrderSummary(session, pricePerPage);
-                await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
+                await this.sendContentMessage(sender, 'cf_order_confirm', { summary: summary + priceTag });
                 return null;
             }
 
             if (session.step === 'AWAITING_CONFIRMATION') {
                 const pricePerPage = session.color ? 10 : 2;
-
-                // HCI: Graceful fallback — MENU escape from confirmation
-                if (normalizedMessage === 'menu' || normalizedMessage === 'help' || normalizedMessage === '/help') {
-                    const summary = this.generateOrderSummary(session, pricePerPage);
-                    await this.sendTextMessage(sender,
-                        `📋 Your order is saved. Here's a reminder:\n\n${summary}\n\n` +
-                        `Reply:\n✅ *YES* to confirm and pay\n✏️ *EDIT* to change options\n❌ *CANCEL* to start over`
-                    );
-                    return null;
-                }
 
                 // Issue 6: kiosk was blocked — retry falls through to confirm logic
                 if (session.kioskBlockedAt && (normalizedMessage === 'retry' || normalizedMessage.includes('confirm'))) {
@@ -745,12 +882,10 @@ export class WhatsappService {
                         return null;
                     }
                 } else {
-                    // HCI: Graceful fallback — explicitly re-prompt with options
+                    // HCI: Graceful fallback — re-show the order summary with buttons
                     const summary = this.generateOrderSummary(session, pricePerPage);
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender,
-                        `${summary}\n\nReply:\n✅ *YES* to confirm & pay\n✏️ *EDIT* to change options\n❌ *CANCEL* to start over\n\n💡 Type *MENU* for help.`
-                    );
+                    await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
                     return null;
                 }
             }
@@ -768,37 +903,64 @@ export class WhatsappService {
                     return await this.handleIncomingMessage(sender, 'confirm_pay');
                 }
 
-                let msgLinks = '';
-                if (session.paymentLink) {
-                    msgLinks = `🔗 Payment link: ${session.paymentLink}`;
-                }
-                if (session.phonepeLink) {
-                    msgLinks += `${msgLinks ? '\n' : ''}🔗 PhonePe: ${session.phonepeLink}`;
-                }
-                if (session.cashfreeLink) {
-                    msgLinks += `${msgLinks ? '\n' : ''}🔗 Cashfree: ${session.cashfreeLink}`;
+                // Scenario 5 fix: handle "I already paid" and status-check keywords with a helpful button response
+                const paymentStatusKeywords = ['paid', 'done', 'completed', 'status', 'when', 'printed', 'print', 'check'];
+                if (paymentStatusKeywords.some(kw => normalizedMessage === kw || normalizedMessage.startsWith(kw + ' ') || normalizedMessage.endsWith(' ' + kw))) {
+                    await this.sendTypingIndicator(sender);
+                    await this.sendButtonMessage(
+                        sender,
+                        `Once your payment is received, printing starts automatically and you'll get a notification.\n\nIf you've already paid and this is still showing, please wait 1–2 minutes for confirmation.`,
+                        [
+                            { id: 'retry', label: '🔄 Refresh Link' },
+                            { id: 'cancel', label: '❌ Cancel Order' },
+                        ],
+                        `⏳ Waiting for ₹${session.price} payment`,
+                        'Tap Refresh Link if your payment link expired'
+                    );
+                    return null;
                 }
 
-                if (!msgLinks) {
+                // Default: show payment links with RETRY button
+                let linksText = '';
+                if (session.phonepeLink) linksText += `🔗 PhonePe: ${session.phonepeLink}\n`;
+                if (session.cashfreeLink) linksText += `🔗 Cashfree: ${session.cashfreeLink}\n`;
+                if (session.paymentLink && !session.phonepeLink && !session.cashfreeLink) {
+                    linksText += `🔗 Pay here: ${session.paymentLink}\n`;
+                }
+
+                if (!linksText) {
+                    // No links — push back to confirmation so user can re-generate
                     session.step = 'AWAITING_CONFIRMATION';
                     await this.saveSession(sender, session);
-                    const noLinkMsg = 'Payment link is not available right now. Type *YES* to try generating it again, or *CANCEL* to start over.';
                     try {
                         await this.sendTypingIndicator(sender);
-                        await this.sendTextMessage(sender, noLinkMsg);
+                        await this.sendButtonMessage(
+                            sender,
+                            'Payment link is not available. Tap below to try generating a new one.',
+                            [{ id: 'confirm_pay', label: '✅ Generate Link' }, { id: 'cancel', label: '❌ Cancel' }],
+                            '⚠️ No Payment Link'
+                        );
                         return null;
                     } catch {
-                        return noLinkMsg;
+                        return 'Payment link unavailable. Type YES to try again or CANCEL to start over.';
                     }
                 }
 
-                const msg = `We are waiting for your payment of ₹${session.price} to be confirmed.\n\n${msgLinks}\n\nLink expired? Reply *RETRY* for a new one.`;
                 try {
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, msg);
+                    await this.sendButtonMessage(
+                        sender,
+                        `${linksText}\nWe'll notify you as soon as payment is confirmed and printing begins.`,
+                        [
+                            { id: 'retry', label: '🔄 Refresh Link' },
+                            { id: 'cancel', label: '❌ Cancel Order' },
+                        ],
+                        `💰 Pay ₹${session.price} to print`,
+                        'Link expired? Tap Refresh Link'
+                    );
                     return null;
                 } catch (err) {
-                    return msg;
+                    return `Pay ₹${session.price}: ${linksText}\nType RETRY for a new link.`;
                 }
             }
 
@@ -833,6 +995,14 @@ export class WhatsappService {
         await this.sendTypingIndicator(sender);
         const { pages, supabaseUrl, fileName } = await this.getPageCount(sender, mediaUrl, mediaContentType);
 
+        // Issue 16: Notify user if R2/Supabase upload failed
+        if (!supabaseUrl) {
+            this.logger.warn(`R2 upload failed for ${sender}, using temporary URL`);
+            await this.sendTextMessage(sender,
+                '⚠️ Note: File uploaded with temporary storage. Please complete your order soon.'
+            );
+        }
+
         const fileEntry: UploadedFile = {
             url: supabaseUrl || mediaUrl,
             pages,
@@ -853,23 +1023,57 @@ export class WhatsappService {
         });
     }
 
-    // Issue 2: Session TTL — 30-minute cleanup cron
+    // Issue 2 + Scenario 2 fix: Session TTL — 30-minute cleanup cron with 5-minute expiry warning
     @Cron('*/15 * * * *')
     async cleanupExpiredSessions(): Promise<void> {
-        const cutoff = new Date(Date.now() - 30 * 60 * 1000);
+        const now = Date.now();
+        const cutoff = new Date(now - 30 * 60 * 1000);       // 30 min → delete
+        const warnCutoff = new Date(now - 25 * 60 * 1000);   // 25 min → warn (5 min before deletion)
         try {
             const expiredRows = await this.prisma.chatSession.findMany({
-                where: { updatedAt: { lt: cutoff } },
-                select: { sender: true, data: true },
+                where: { updatedAt: { lt: warnCutoff } },
+                select: { sender: true, data: true, updatedAt: true },
             });
 
-            const toDelete = expiredRows
-                .filter(row => {
-                    const d = row.data as any;
-                    return d?.step !== 'PAID' && d?.step !== 'PRINTED';
-                })
-                .map(row => row.sender);
+            const toDelete: string[] = [];
+            const toWarn: { sender: string; data: any }[] = [];
 
+            for (const row of expiredRows) {
+                const d = row.data as any;
+                // Never delete PAID or PRINTED sessions
+                if (d?.step === 'PAID' || d?.step === 'PRINTED') continue;
+
+                if (row.updatedAt < cutoff) {
+                    toDelete.push(row.sender);
+                } else {
+                    // In the 25–30 min window — send a warning if not already warned
+                    if (!d?._expiryWarnedAt) {
+                        toWarn.push({ sender: row.sender, data: d });
+                    }
+                }
+            }
+
+            // Send expiry warnings
+            for (const { sender, data } of toWarn) {
+                try {
+                    await this.sendTextMessage(sender,
+                        `⏰ *Heads up!* Your CopyFlow session will expire in ~5 minutes due to inactivity.\n\n` +
+                        `Type anything or send a file to keep it active.\n` +
+                        `📍 Current step: *${this.getStepLabel(data?.step || 'AWAITING_FILE')}*`
+                    );
+                    // Mark as warned so we don't spam on the next cron tick
+                    const session = await this.loadSession(sender);
+                    if (session) {
+                        (session as any)._expiryWarnedAt = now;
+                        await this.saveSession(sender, session);
+                    }
+                    this.logger.log(`Sent expiry warning to ${sender}`);
+                } catch (warnErr: any) {
+                    this.logger.warn(`Failed to send expiry warning to ${sender}: ${warnErr.message}`);
+                }
+            }
+
+            // Delete fully expired sessions
             if (toDelete.length > 0) {
                 await this.prisma.chatSession.deleteMany({
                     where: { sender: { in: toDelete } },
@@ -1033,7 +1237,7 @@ export class WhatsappService {
         } catch (error: any) {
             const errorMsg = error?.error?.description || error?.message || 'Unknown payment gateway error';
             this.logger.error(`Error creating payment link: ${errorMsg}`);
-            session.step = 'AWAITING_SIDES';
+            session.step = 'AWAITING_CONFIRMATION';
             session.jobId = undefined;
             session.paymentLink = undefined;
             session.phonepeLink = undefined;

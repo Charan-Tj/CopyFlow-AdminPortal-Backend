@@ -98,6 +98,54 @@ export class TwilioProvider implements WhatsappProvider, OnModuleInit {
         });
     }
 
+    /**
+     * Send a quick-reply button message via Twilio Content API.
+     * Creates a one-time content template and sends it immediately.
+     * Falls back to plain text listing button labels if Content API fails.
+     */
+    async sendButtonMessage(
+        to: string,
+        body: string,
+        buttons: { id: string; label: string }[],
+        header?: string,
+        footer?: string,
+    ): Promise<void> {
+        const fullText = [
+            header ? `*${header}*` : '',
+            body,
+            footer ? `_${footer}_` : '',
+        ].filter(Boolean).join('\n\n');
+
+        try {
+            const actions = buttons.slice(0, 3).map(b => ({
+                id: b.id,
+                title: b.label.slice(0, 20),
+            }));
+
+            const content = await this.twilioClient.content.v1.contents.create({
+                friendlyName: `cf_btn_${Date.now()}`,
+                language: 'en',
+                types: {
+                    'twilio/quick-reply': { body: fullText, actions },
+                } as any,
+            });
+
+            const envFrom = process.env.TWILIO_PHONE_NUMBER || '+14155238886';
+            const from = envFrom.includes('whatsapp:') ? envFrom : `whatsapp:${envFrom}`;
+
+            await this.twilioClient.messages.create({
+                contentSid: content.sid,
+                from,
+                contentVariables: JSON.stringify({}),
+                to: to.includes('whatsapp:') ? to : `whatsapp:${to}`,
+            });
+        } catch (err: any) {
+            this.logger.warn(`sendButtonMessage via Content API failed, falling back to text: ${err.message}`);
+            const btnList = buttons.map(b => b.label).join(' | ');
+            await this.sendTextMessage(to, `${fullText}\n\n${btnList}`);
+        }
+    }
+
     async sendContentMessage(to: string, contentSid: string, variables: any = {}): Promise<void> {
         // Retrieve actual SID from map if contentSid is a friendly name like 'cf_copies_list'
         const actualSid = this.templates[contentSid] || contentSid;
