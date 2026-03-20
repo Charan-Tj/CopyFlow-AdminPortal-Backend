@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, UseGuards, UnauthorizedException, Request, Patch } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, UseGuards, UnauthorizedException, Request, Patch, Query } from '@nestjs/common';
 import { NodeService } from './node.service';
 import { NodeAuthGuard } from '../common/guards/node-auth.guard';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiBody } from '@nestjs/swagger';
@@ -51,6 +51,16 @@ export class NodeController {
     async getJobs(@Request() req: any) {
         const nodeId = req.node.nodeId;
         return this.nodeService.getPendingJobs(nodeId);
+    }
+
+    @UseGuards(NodeAuthGuard)
+    @Get('jobs/history')
+    @ApiOperation({ summary: 'Get recent completed jobs for the node' })
+    async getJobsHistory(@Request() req: any, @Query('limit') limit?: string) {
+        const nodeId = req.node.nodeId;
+        const parsedLimit = Number.parseInt(String(limit || ''), 10);
+        const finalLimit = Number.isFinite(parsedLimit) ? parsedLimit : 50;
+        return this.nodeService.getRecentJobs(nodeId, finalLimit);
     }
 
     @UseGuards(NodeAuthGuard)
