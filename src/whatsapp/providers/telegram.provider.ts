@@ -146,6 +146,36 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         }
     }
 
+    /**
+     * Ask a Telegram user to share their phone number.
+     * Sends a ReplyKeyboard with a single contact-request button.
+     * The bot receives the contact as a 'contact' update (handled in setupListeners).
+     */
+    async sendPhoneRequest(to: string): Promise<void> {
+        const chatId = this.formatTo(to);
+        if (isNaN(chatId) || !TelegramProvider.bot) return;
+        try {
+            await TelegramProvider.bot.telegram.sendMessage(
+                chatId,
+                '📱 *One last step!*\n\nWe need your phone number to generate the payment link.\n\nTap the button below to share it securely:',
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        keyboard: [[{ text: '📱 Share My Phone Number', request_contact: true }]],
+                        resize_keyboard: true,
+                        one_time_keyboard: true,
+                    },
+                } as any
+            );
+        } catch (err: any) {
+            this.logger.error(`sendPhoneRequest failed: ${err.message}`);
+            // Fallback: ask them to type it
+            await this.sendTextMessage(to,
+                '📱 Please type your 10-digit mobile number so we can generate your payment link (e.g. 9876543210):'
+            );
+        }
+    }
+
     async sendTextMessage(to: string, body: string): Promise<void> {
         try {
             const chatId = this.formatTo(to);
@@ -350,6 +380,20 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                     const photo = msg.photo[msg.photo.length - 1];
                     mediaUrl = photo.file_id;
                     mediaContentType = 'image/jpeg';
+                } else if (msg.contact && msg.contact.phone_number) {
+                    const cleaned = msg.contact.phone_number.replace(/^\+?91/, '').replace(/\D/g, '');
+                    message = `__phone__:${cleaned}`;
+
+                    // Auto-dismiss the Telegram reply keyboard immediately
+                    try {
+                        if (TelegramProvider.bot && chatId) {
+                            await TelegramProvider.bot.telegram.sendMessage(
+                                chatId,
+                                'Phone number received! Generating your payment link...',
+                                { reply_markup: { remove_keyboard: true } } as any
+                            );
+                        }
+                    } catch (e) {}
                 }
             } else if (body.type === 'callback') {
                 const cbQuery = ctx.callbackQuery as any;
