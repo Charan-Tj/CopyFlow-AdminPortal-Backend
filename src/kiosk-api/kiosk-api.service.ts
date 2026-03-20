@@ -951,5 +951,60 @@ export class KioskApiService {
 
     return lines.join('\n');
   }
+
+  async selfSetupEnv(
+    email: string,
+    password: string,
+  ): Promise<{ ok: boolean; envContent?: string; error?: string }> {
+    try {
+      // Validate credentials — will throw UnauthorizedException if wrong
+      const loginResult = await this.nodeService.login(email, password);
+      const node = loginResult.node;
+
+      if (!node?.id) {
+        return { ok: false, error: 'Could not resolve node from credentials' };
+      }
+
+      const serverUrl =
+        process.env.KIOSK_DEFAULT_SERVER_URL ||
+        process.env.SERVER_URL ||
+        '';
+
+      const lines = [
+        `# CopyFlow Kiosk — generated for node: ${node.name} (${node.code})`,
+        `PORT=4173`,
+        `SERVER_URL=${serverUrl}`,
+        `AGENT_ID=${node.code}`,
+        `AGENT_TOKEN=`,
+        `NODE_EMAIL=${email}`,
+        `NODE_PASSWORD=${password}`,
+        `KIOSK_DEFAULT_SERVER_URL=${serverUrl}`,
+        `KIOSK_NAME=${node.name}`,
+        `KIOSK_DASHBOARD_USER=admin`,
+        `KIOSK_DASHBOARD_PASSWORD=admin123`,
+        `POLL_INTERVAL_MS=10000`,
+        `PRINTER_SYNC_MS=30000`,
+        `HEARTBEAT_MS=12000`,
+        `PENDING_JOBS_PATH=/node/jobs`,
+        `EVENTS_PATH=/node/events`,
+        `NODE_LOGIN_PATH=/node/auth/login`,
+        `PRICE_BW_PER_PAGE=2`,
+        `PRICE_COLOR_PER_PAGE=5`,
+        `RETRY_MAX_ATTEMPTS=2`,
+        `JOB_HISTORY_RETENTION_HOURS=48`,
+        `LIFECYCLE_SWEEP_MS=60000`,
+        `MIN_INK_LEVEL=10`,
+        `SNMP_ENABLED=false`,
+        `SNMP_COMMUNITY=public`,
+        `SNMP_TIMEOUT_MS=2000`,
+        `DASHBOARD_SESSION_TTL_MS=28800000`,
+      ];
+
+      return { ok: true, envContent: lines.join('\n') };
+    } catch {
+      return { ok: false, error: 'Invalid email or password' };
+    }
+  }
 }
+
 

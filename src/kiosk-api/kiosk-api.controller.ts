@@ -83,7 +83,6 @@ export class KioskApiController {
   @ApiOperation({ summary: 'Get download info for a specific node (for download page)' })
   @ApiQuery({ name: 'nodeId', required: true, description: 'Node ID' })
   async getDownloadInfo(@Query('nodeId') nodeId: string, @Req() req: any) {
-    // Require auth — only logged-in admin portal users can see this
     const token = req?.headers?.authorization?.split(' ')?.[1] || req?.headers?.['x-session-token'] || '';
     if (!token) {
       throw new NotFoundException('Authentication required');
@@ -96,7 +95,7 @@ export class KioskApiController {
   }
 
   @Get('download/env')
-  @ApiOperation({ summary: 'Download the .env config file for a specific node' })
+  @ApiOperation({ summary: 'Download the .env config file for a specific node (admin only)' })
   @ApiQuery({ name: 'nodeId', required: true, description: 'Node ID' })
   async downloadEnv(
     @Query('nodeId') nodeId: string,
@@ -104,7 +103,6 @@ export class KioskApiController {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     @Res() res: any,
   ) {
-    // Require auth — only logged-in admin portal users can download this
     const token = req?.headers?.authorization?.split(' ')?.[1] || req?.headers?.['x-session-token'] || '';
     if (!token) {
       res.status(401).json({ error: 'Authentication required' });
@@ -119,5 +117,41 @@ export class KioskApiController {
     res.setHeader('Content-Disposition', 'attachment; filename=".env"');
     res.send(content);
   }
-}
 
+  // ── Public self-service endpoint for shopkeepers ──────────────────────────
+
+  @Post('self-setup')
+  @ApiOperation({ summary: 'Public: shopkeeper logs in and downloads their pre-filled .env' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string' },
+        password: { type: 'string' },
+      },
+    },
+  })
+  async selfSetup(
+    @Body() body: { email?: string; password?: string },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    @Res() res: any,
+  ) {
+    const email = String(body?.email || '').trim();
+    const password = String(body?.password || '').trim();
+
+    if (!email || !password) {
+      res.status(400).json({ error: 'Email and password are required' });
+      return;
+    }
+
+    const result = await this.kioskApiService.selfSetupEnv(email, password);
+    if (!result.ok) {
+      res.status(401).json({ error: result.error || 'Invalid credentials' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename=".env"');
+    res.send(result.envContent);
+  }
+}
