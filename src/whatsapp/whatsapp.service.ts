@@ -844,10 +844,10 @@ export class WhatsappService {
                     return null;
                 }
 
-                session.step = 'AWAITING_CONFIRMATION';
+                session.step = 'AWAITING_SIDES';
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
-                // Skip separate status text — sides button message header says "Step 4 of 4"
+                // Step 4 of 4 header is embedded in the cf_sides_quickrep button message
                 await this.sendContentMessage(sender, 'cf_sides_quickrep');
                 return null;
             }
