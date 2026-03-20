@@ -384,7 +384,41 @@ export class WhatsappService {
                     session.nodeCode = node.node_code;
                     await this.saveSession(sender, session);
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, `✅ Selected shop: ${node.name} (${node.node_code})\n${node.college}, ${node.city}\n\nYou can now send your files to print.`);
+
+                    // Check kiosk status immediately so user knows upfront — not just at payment time
+                    const kioskStatus = await this.getNodeKioskStatusSnapshot(node.id, node.node_code);
+
+                    if (!kioskStatus.isPrintingReady) {
+                        // Shop is offline — warn early but allow them to proceed
+                        // (it might come back online by the time they're done uploading)
+                        await this.sendButtonMessage(
+                            sender,
+                            `*${node.name}* (${node.node_code})\n${node.college}, ${node.city}\n\n` +
+                            `⚠️ *This shop's kiosk is currently offline.*\n` +
+                            `Reason: ${kioskStatus.reason}\n\n` +
+                            `You can still upload your files now — the shop may come back online. ` +
+                            `If it's still offline when you try to pay, you'll be notified.`,
+                            [
+                                { id: 'shops', label: '🏪 Pick Different Shop' },
+                                { id: 'help',  label: '❓ Help' },
+                            ],
+                            '⚠️ Shop selected (offline)',
+                            'Your files are safe — you can switch shops anytime'
+                        );
+                    } else {
+                        // Shop is online — clean confirmation + nudge to start uploading
+                        await this.sendButtonMessage(
+                            sender,
+                            `*${node.name}* (${node.node_code})\n${node.college}, ${node.city}\n\n` +
+                            `🟢 Kiosk is online and ready to print!\n\nSend your files (PDF, Word, or image) to get started.`,
+                            [
+                                { id: 'shops', label: '🏪 Change Shop' },
+                                { id: 'help',  label: '❓ Help' },
+                            ],
+                            '✅ Shop selected!',
+                            'Upload your files to continue'
+                        );
+                    }
                 } else {
                     // List available shops
                     const activeNodes = await this.prisma.node.findMany({
@@ -1145,13 +1179,22 @@ export class WhatsappService {
                 session.kioskBlockedAt = Date.now();
                 await this.saveSession(sender, session);
 
-                const msg = `⚠️ The print shop is temporarily offline (${kioskStatus.reason}).\n\nYour order is saved. Reply *RETRY* in a few minutes and we'll try again.\n\n${this.generateOrderSummary(session, pricePerPage)}`;
                 try {
                     await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, msg);
+                    await this.sendButtonMessage(
+                        sender,
+                        `Your order is saved and your files are ready.\n\nReason: ${kioskStatus.reason}\n\nTap *Retry* once the shop is back online — no need to re-upload anything.`,
+                        [
+                            { id: 'confirm_pay', label: '🔄 Retry' },
+                            { id: 'shops',        label: '🏪 Change Shop' },
+                            { id: 'cancel',       label: '❌ Cancel' },
+                        ],
+                        `⚠️ ${session.nodeCode || 'Shop'} is currently offline`,
+                        'Your files & preferences are saved safely'
+                    );
                     return null;
                 } catch {
-                    return msg;
+                    return `Shop ${session.nodeCode} is offline (${kioskStatus.reason}). Type RETRY to try again or CANCEL to start over.`;
                 }
             }
 
@@ -1169,6 +1212,10 @@ export class WhatsappService {
 
             session.paymentLink = undefined;
 
+            // Track individual gateway errors so we can explain exactly what failed
+            let phonePeError: string | null = null;
+            let cashfreeError: string | null = null;
+
             try {
                 this.logger.log('Creating payment link via phonepeService...');
                 const phonepeLink = await this.phonepeService.createPaymentLink(
@@ -1182,7 +1229,11 @@ export class WhatsappService {
                     session.paymentLink = phonepeLink;
                 }
             } catch (err: any) {
-                this.logger.error(`Error generating PhonePe link: ${err.message}`);
+                phonePeError = err?.response?.data?.message
+                    || err?.response?.data?.error
+                    || err?.message
+                    || 'Unknown error';
+                this.logger.error(`Error generating PhonePe link: ${phonePeError}`);
             }
 
             try {
@@ -1201,18 +1252,26 @@ export class WhatsappService {
                     }
                 }
             } catch (err: any) {
-                this.logger.error(`Error generating Cashfree link: ${err.message}`);
+                cashfreeError = err?.response?.data?.message
+                    || err?.response?.data?.error
+                    || err?.message
+                    || 'Unknown error';
+                this.logger.error(`Error generating Cashfree link: ${cashfreeError}`);
             }
 
             if (!session.paymentLink && !session.phonepeLink && !session.cashfreeLink) {
-                throw new Error('No payment gateway is currently available');
+                // Build a human-readable reason from what actually failed
+                const reasons: string[] = [];
+                if (phonePeError)   reasons.push(`PhonePe: ${phonePeError}`);
+                if (cashfreeError)  reasons.push(`Cashfree: ${cashfreeError}`);
+                const reasonStr = reasons.length > 0 ? reasons.join('\n') : 'All payment gateways are currently unavailable';
+                throw new Error(reasonStr);
             }
 
             session.step = 'AWAITING_PAYMENT';
 
             // Persist session with jobId so webhook can look it up after restart
             await this.saveSession(sender, session);
-
             const filesText = fileCount > 1 ? `${fileCount} files, ${session.pages || 1} total pages` : `${session.pages || 1} pages`;
 
             let messageLinks = '';
@@ -1235,7 +1294,8 @@ export class WhatsappService {
                 return msg;
             }
         } catch (error: any) {
-            const errorMsg = error?.error?.description || error?.message || 'Unknown payment gateway error';
+            // errorMsg may contain per-gateway breakdown like "PhonePe: Invalid key\nCashfree: Timeout"
+            const errorMsg = error?.message || 'Unknown payment gateway error';
             this.logger.error(`Error creating payment link: ${errorMsg}`);
             session.step = 'AWAITING_CONFIRMATION';
             session.jobId = undefined;
@@ -1243,17 +1303,29 @@ export class WhatsappService {
             session.phonepeLink = undefined;
             session.cashfreeLink = undefined;
             await this.saveSession(sender, session);
-            // HCI: Graceful fallback — explain what happened + escape hatch
+
+            // Build a user-friendly explanation — show the actual reason, not a vague sorry
+            const reasonLines = errorMsg
+                .split('\n')
+                .map((line: string) => `  • ${line}`)
+                .join('\n');
+
             try {
                 await this.sendTypingIndicator(sender);
-                await this.sendTextMessage(sender,
-                    `⚠️ Sorry, we couldn't generate a payment link right now.\n\n` +
-                    `Your files and preferences are saved.\n\n` +
-                    `🔄 Type *RETRY* to try again, or *CANCEL* to start over.`
+                await this.sendButtonMessage(
+                    sender,
+                    `Your files and preferences are saved — you can retry without re-uploading.\n\n` +
+                    `*Reason:*\n${reasonLines}`,
+                    [
+                        { id: 'confirm_pay', label: '🔄 Retry Payment' },
+                        { id: 'cancel',      label: '❌ Cancel Order' },
+                    ],
+                    '⚠️ Payment link failed',
+                    'This is usually a temporary issue'
                 );
                 return null;
             } catch (err) {
-                return 'Payment link failed. Type RETRY to try again or CANCEL to start over.';
+                return `Payment link failed: ${errorMsg}\nType RETRY to try again or CANCEL to start over.`;
             }
         }
     }
