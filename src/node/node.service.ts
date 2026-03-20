@@ -125,8 +125,9 @@ export class NodeService {
         };
     }
 
-    async getRecentJobs(nodeId: string, limit = 50, from?: string, to?: string) {
+    async getRecentJobs(nodeId: string, limit = 50, from?: string, to?: string, offset = 0) {
         const take = Math.min(200, Math.max(1, Number(limit) || 50));
+        const skip = Math.max(0, Number(offset) || 0);
         const parsedFrom = from ? new Date(from) : null;
         const parsedTo = to ? new Date(to) : null;
         const hasFrom = parsedFrom instanceof Date && Number.isFinite(parsedFrom.getTime());
@@ -148,6 +149,7 @@ export class NodeService {
             orderBy: {
                 updatedAt: 'desc'
             },
+            skip,
             take
         });
 
