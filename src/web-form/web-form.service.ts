@@ -49,7 +49,8 @@ export class WebFormService {
 
         if (job) {
             this.logger.log(`Status check hit printJob for jobId=${jobId}, status=${job.status}`);
-            return { paid: true, status: job.status };
+            const isPaidStatus = job.status === 'PAID' || job.status === 'PRINTED';
+            return { paid: isPaidStatus, status: job.status };
         }
 
         // Check if it's still just a ChatSession
