@@ -120,34 +120,6 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 await ctx.answerCbQuery();
             } catch (e) { }
         });
-
-        // Handle contact sharing (phone number request response)
-        TelegramProvider.bot.on('contact', async (ctx: any) => {
-            const chatId = ctx.message?.chat?.id;
-            const phone = ctx.message?.contact?.phone_number;
-            if (!chatId || !phone) return;
-
-            const sender = `telegram:${chatId}`;
-            // Clean: strip leading + or country code prefix, normalize to 10-digit Indian number
-            const cleaned = phone.replace(/^\+?91/, '').replace(/\D/g, '');
-
-            // Feed into queue as a special message the AWAITING_PHONE handler recognises
-            await this.queueService.add('process-incoming', {
-                sender,
-                message: `__phone__:${cleaned}`,
-                mediaUrl: null,
-                mediaContentType: null,
-            });
-
-            // Dismiss the reply keyboard immediately after receiving contact
-            try {
-                await TelegramProvider.bot!.telegram.sendMessage(
-                    chatId,
-                    '✅ Phone number received! Generating your payment link...',
-                    { reply_markup: { remove_keyboard: true } } as any
-                );
-            } catch (e) { }
-        });
     }
 
     private formatTo(to: string): number {
@@ -408,6 +380,20 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                     const photo = msg.photo[msg.photo.length - 1];
                     mediaUrl = photo.file_id;
                     mediaContentType = 'image/jpeg';
+                } else if (msg.contact && msg.contact.phone_number) {
+                    const cleaned = msg.contact.phone_number.replace(/^\+?91/, '').replace(/\D/g, '');
+                    message = `__phone__:${cleaned}`;
+
+                    // Auto-dismiss the Telegram reply keyboard immediately
+                    try {
+                        if (TelegramProvider.bot && chatId) {
+                            await TelegramProvider.bot.telegram.sendMessage(
+                                chatId,
+                                'Phone number received! Generating your payment link...',
+                                { reply_markup: { remove_keyboard: true } } as any
+                            );
+                        }
+                    } catch (e) {}
                 }
             } else if (body.type === 'callback') {
                 const cbQuery = ctx.callbackQuery as any;
