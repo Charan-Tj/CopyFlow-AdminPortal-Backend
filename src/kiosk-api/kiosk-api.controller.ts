@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
-import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Post, Query, Req, Res, NotFoundException } from '@nestjs/common';
+import { ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { KioskApiService } from './kiosk-api.service';
 
 type LoginBody = {
@@ -78,4 +78,46 @@ export class KioskApiController {
   testConnection(@Req() req: any) {
     return this.kioskApiService.testConnection(req);
   }
+
+  @Get('download/info')
+  @ApiOperation({ summary: 'Get download info for a specific node (for download page)' })
+  @ApiQuery({ name: 'nodeId', required: true, description: 'Node ID' })
+  async getDownloadInfo(@Query('nodeId') nodeId: string, @Req() req: any) {
+    // Require auth — only logged-in admin portal users can see this
+    const token = req?.headers?.authorization?.split(' ')?.[1] || req?.headers?.['x-session-token'] || '';
+    if (!token) {
+      throw new NotFoundException('Authentication required');
+    }
+    const info = await this.kioskApiService.getDownloadInfo(nodeId);
+    if (!info) {
+      throw new NotFoundException(`Node ${nodeId} not found`);
+    }
+    return info;
+  }
+
+  @Get('download/env')
+  @ApiOperation({ summary: 'Download the .env config file for a specific node' })
+  @ApiQuery({ name: 'nodeId', required: true, description: 'Node ID' })
+  async downloadEnv(
+    @Query('nodeId') nodeId: string,
+    @Req() req: any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    @Res() res: any,
+  ) {
+    // Require auth — only logged-in admin portal users can download this
+    const token = req?.headers?.authorization?.split(' ')?.[1] || req?.headers?.['x-session-token'] || '';
+    if (!token) {
+      res.status(401).json({ error: 'Authentication required' });
+      return;
+    }
+    const content = await this.kioskApiService.generateEnvFile(nodeId);
+    if (!content) {
+      res.status(404).json({ error: `Node ${nodeId} not found` });
+      return;
+    }
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename=".env"');
+    res.send(content);
+  }
 }
+
