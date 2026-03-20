@@ -59,13 +59,21 @@ export class PrintService {
             }
 
             // Create job record in database instead of just finding it, since WhatsApp flow doesn't create it beforehand.
-            const isColor = jobData.color === true;
+            const isColor = jobData.color === true || String(jobData.color).toLowerCase() === 'true';
             const pricePerPage = isColor ? 10 : 2;
-            const totalAmount = (jobData.pages || 1) * (jobData.copies || 1) * pricePerPage;
+            const safePages = Number.isFinite(Number(jobData.pages)) && Number(jobData.pages) > 0 ? Number(jobData.pages) : 1;
             const universalCopies = Number(jobData.copies || 1);
             const safeUniversalCopies = Number.isFinite(universalCopies) && universalCopies > 0 ? universalCopies : 1;
+            const providedPrice = Number(jobData.price);
+            const totalAmount = Number.isFinite(providedPrice) && providedPrice > 0
+                ? providedPrice
+                : safePages * safeUniversalCopies * pricePerPage;
             const normalizedFileEntries = this.normalizeFileEntries(jobData.fileUrls, safeUniversalCopies);
             const primaryFileUrl = jobData.fileUrl || normalizedFileEntries[0]?.url || null;
+            const fileMeta = Array.isArray(jobData.files) ? jobData.files.find((entry: any) => entry && typeof entry === 'object') : null;
+            const documentName = String(jobData.documentName || fileMeta?.name || 'Document').trim() || 'Document';
+            const rawUserName = String(jobData.userName || jobData.customerName || jobData.sender || 'Unknown').trim() || 'Unknown';
+            const userName = rawUserName.replace(/^(web|whatsapp|telegram):/i, '');
 
             // Generate a random Kiosk ID for DB requirement if not provided
             let dummyKioskId = `kiosk_${jobData.nodeId}_1`;
@@ -112,10 +120,13 @@ export class PrintService {
                         normalizedFileEntries.length > 0
                             ? normalizedFileEntries
                             : (primaryFileUrl ? [{ url: primaryFileUrl, copies: safeUniversalCopies }] : undefined),
-                    page_count: jobData.pages || 1,
+                    page_count: safePages,
                     color_mode: isColor ? 'COLOR' : 'BW',
                     status: 'PAID',
                     payable_amount: totalAmount,
+                    user_name: userName,
+                    document_name: documentName,
+                    assigned_printer: jobData.printerName || null,
                 }
             });
 

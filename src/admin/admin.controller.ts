@@ -30,15 +30,6 @@ export class AdminController {
         return this.adminService.getAllJobs(Number(page) || 1, Number(limit) || 20, status);
     }
 
-    @Get('audit-logs')
-    @ApiOperation({ summary: 'List system Audit Logs' })
-    getAuditLogs(
-        @Query('page') page?: number,
-        @Query('limit') limit?: number
-    ) {
-        return this.adminService.getAuditLogs(Number(page) || 1, Number(limit) || 50);
-    }
-
     @Get('overview')
     @ApiOperation({ summary: 'Get Dashboard Overview Statistics' })
     getOverview() {
@@ -104,8 +95,7 @@ export class AdminController {
     @Patch('nodes/:id/credentials/reset')
     @ApiOperation({ summary: 'Reset operator password for a node credential' })
     resetNodeCredentialPassword(@Param('id') id: string, @Body() body: any, @Request() req: any) {
-        const adminEmail = req.user?.email || req.user?.sub || 'admin';
-        return this.adminService.resetNodeCredentialPassword(id, body.email, body.password, adminEmail);
+        return this.adminService.resetNodeCredentialPassword(id, body.email, body.password);
     }
 
     @Get('nodes/:id/qr')

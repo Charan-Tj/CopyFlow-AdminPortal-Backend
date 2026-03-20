@@ -82,21 +82,6 @@ export class AdminService {
         return { data, total, page, limit };
     }
 
-    async getAuditLogs(page = 1, limit = 50) {
-        const skip = (page - 1) * limit;
-
-        const [data, total] = await Promise.all([
-            this.prisma.auditLog.findMany({
-                skip,
-                take: Number(limit),
-                orderBy: { timestamp: 'desc' },
-            }),
-            this.prisma.auditLog.count()
-        ]);
-
-        return { data, total, page, limit };
-    }
-
     async getOverviewStats() {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -171,20 +156,10 @@ export class AdminService {
         const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
         if (!job) throw new NotFoundException('Job not found');
 
-        const updated = await this.prisma.printJob.update({
+        return this.prisma.printJob.update({
             where: { job_id: jobId },
             data: { status: 'FAILED' }
         });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'JOB_EXPIRED',
-                actor: 'admin',
-                metadata: { jobId }
-            }
-        });
-
-        return updated;
     }
 
     async resendPayment(jobId: string) {
@@ -394,20 +369,10 @@ export class AdminService {
         const node = await this.prisma.node.findUnique({ where: { id } });
         if (!node) throw new NotFoundException('Node not found');
 
-        const updated = await this.prisma.node.update({
+        return this.prisma.node.update({
             where: { id },
             data: { is_active: !node.is_active }
         });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'NODE_TOGGLED',
-                node_id: id,
-                metadata: { is_active: updated.is_active }
-            }
-        });
-
-        return updated;
     }
 
     async createNodeCredentials(nodeId: string, email: string, plainPass: string) {
@@ -440,7 +405,7 @@ export class AdminService {
         };
     }
 
-    async resetNodeCredentialPassword(nodeId: string, email: string | undefined, plainPass: string, actor?: string) {
+    async resetNodeCredentialPassword(nodeId: string, email: string | undefined, plainPass: string) {
         if (!plainPass) {
             throw new BadRequestException('Password is required');
         }
@@ -490,15 +455,6 @@ export class AdminService {
                         node_code: true
                     }
                 }
-            }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'NODE_CREDENTIAL_PASSWORD_RESET',
-                node_id: nodeId,
-                actor,
-                metadata: { email: updated.email, role: updated.role }
             }
         });
 

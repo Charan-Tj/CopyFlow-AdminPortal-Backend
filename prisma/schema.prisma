@@ -73,6 +73,10 @@ model PrintJob {
   payment_events      KioskPaymentEvent[]
   failure_diagnostics KioskFailureDiagnostic[]
   lifecycle_events    KioskJobLifecycle[]
+
+  @@index([node_id, status, createdAt])
+  @@index([node_id, updatedAt])
+  @@index([node_id, status, claimed_at, createdAt])
 }
 
 model Payment {
@@ -95,16 +99,6 @@ model PrintToken {
   used       Boolean  @default(false)
   createdAt  DateTime @default(now())
   job        PrintJob @relation(fields: [job_id], references: [job_id])
-}
-
-model AuditLog {
-  id        String   @id @default(uuid())
-  event     String
-  actor     String?
-  metadata  Json?
-  timestamp DateTime @default(now())
-  node_id   String?
-  node      Node?    @relation(fields: [node_id], references: [id])
 }
 
 model User {
@@ -319,7 +313,6 @@ model Node {
   jobs                 PrintJob[]
   credentials          NodeCredential[]
   pricing              PricingConfig[]
-  audit_logs           AuditLog[]
   registration_codes   RegistrationCode[]
   printer_snapshots    KioskPrinterSnapshot[]
   daily_metrics        KioskDailyMetric[]

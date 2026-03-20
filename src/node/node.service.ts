@@ -10,6 +10,8 @@ import { deriveRuntimeStatus, evaluateKioskStatus } from './kiosk-status.util';
 
 @Injectable()
 export class NodeService {
+    private readonly pendingJobsMaxTake = Number(process.env.NODE_PENDING_JOBS_LIMIT || 25);
+
     constructor(private readonly r2Storage: R2Service, 
         private prisma: PrismaService,
         private jwtService: JwtService,
@@ -98,6 +100,7 @@ export class NodeService {
     async getPendingJobs(nodeId: string) {
         const now = new Date();
         const tenMinsAgo = new Date(now.getTime() - 10 * 60 * 1000);
+        const take = Math.min(100, Math.max(1, this.pendingJobsMaxTake));
 
         const jobs = await this.prisma.printJob.findMany({
             where: {
@@ -110,37 +113,16 @@ export class NodeService {
             },
             orderBy: {
                 createdAt: 'asc'
-            }
+            },
+            take
         });
 
-        const jobsWithUrls = await Promise.all(jobs.map(async (job) => {
-            const rawFileUrls = Array.isArray(job.file_urls)
-                ? (job.file_urls as any[])
-                : [];
-
-            const signedFileUrls = await Promise.all(rawFileUrls.map(async (entry) => {
-                let signedFileUrl = '';
-                const rawUrl = typeof entry === 'string' ? entry : String(entry?.url || '');
-                const urlParts = String(rawUrl).split('/');
-                const filename = urlParts[urlParts.length - 1];
-                if (filename) {
-                    signedFileUrl = await this.r2Storage.getSignedUrl(filename, 900);
-                }
-                const rawCopies = Number(typeof entry === 'object' ? entry?.copies : undefined);
-                return {
-                    url: signedFileUrl || rawUrl,
-                    copies: Number.isFinite(rawCopies) && rawCopies > 0 ? rawCopies : Number(job.copies || 1)
-                };
-            }));
-
-            return {
+        return {
+            jobs: jobs.map((job) => ({
                 ...job,
-                file_urls: signedFileUrls.filter((entry) => Boolean(entry)),
                 expires_at: new Date(now.getTime() + 15 * 60 * 1000)
-            };
-        }));
-
-        return { jobs: jobsWithUrls };
+            }))
+        };
     }
 
     async ingestAgentEvent(nodeId: string, type: string, payload: any, time?: string) {
@@ -205,18 +187,6 @@ export class NodeService {
             });
         }
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: `AGENT_${type}`,
-                node_id: nodeId,
-                metadata: {
-                    source: 'kiosk-agent',
-                    at: eventTime.toISOString(),
-                    payload
-                }
-            }
-        });
-
         return { success: true };
     }
 
@@ -241,14 +211,6 @@ export class NodeService {
             data: { status: 'PRINTED' }
         });
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'JOB_PRINTED',
-                node_id: nodeId,
-                metadata: { jobId }
-            }
-        });
-
         if (job.phone_number) {
             // Look up the original sender (with platform prefix, e.g. telegram:123 or whatsapp:+91...)
             // so Telegram users receive the notification on the right channel.
@@ -262,24 +224,37 @@ export class NodeService {
     }
 
     async claimJob(nodeId: string, jobId: string) {
-        const job = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
-
-        if (!job || job.node_id !== nodeId) {
-            throw new NotFoundException('Job not found or unauthorized');
-        }
-
         const now = new Date();
-        if (job.claimed_at && (now.getTime() - job.claimed_at.getTime() < 10 * 60 * 1000)) {
-            throw new ConflictException('Job already claimed');
-        }
+        const tenMinsAgo = new Date(now.getTime() - 10 * 60 * 1000);
 
-        const updatedJob = await this.prisma.printJob.update({
-            where: { job_id: jobId },
+        const claimResult = await this.prisma.printJob.updateMany({
+            where: {
+                job_id: jobId,
+                node_id: nodeId,
+                status: 'PAID',
+                OR: [
+                    { claimed_at: null },
+                    { claimed_at: { lt: tenMinsAgo } }
+                ]
+            },
             data: {
                 claimed_at: now,
                 claimed_by: nodeId
             }
         });
+
+        if (claimResult.count === 0) {
+            const existing = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
+            if (!existing || existing.node_id !== nodeId) {
+                throw new NotFoundException('Job not found or unauthorized');
+            }
+            throw new ConflictException('Job already claimed');
+        }
+
+        const updatedJob = await this.prisma.printJob.findUnique({ where: { job_id: jobId } });
+        if (!updatedJob || updatedJob.node_id !== nodeId) {
+            throw new NotFoundException('Job not found or unauthorized');
+        }
 
         const rawFileUrls = Array.isArray(updatedJob.file_urls)
             ? (updatedJob.file_urls as any[])
@@ -324,14 +299,6 @@ export class NodeService {
         await this.prisma.printJob.update({
             where: { job_id: jobId },
             data: { status: 'FAILED' }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'JOB_FAILED',
-                node_id: nodeId,
-                metadata: { jobId, reason, error_code: errorCode }
-            }
         });
 
         if (job.phone_number) {
@@ -404,14 +371,6 @@ export class NodeService {
             data: { used: true, used_at: new Date() }
         });
 
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'NODE_SELF_REGISTERED',
-                node_id: node.id,
-                metadata: { email, code }
-            }
-        });
-
         const payload = {
             nodeId: node.id,
             nodeCode: node.node_code,
@@ -437,15 +396,6 @@ export class NodeService {
 
         const regCode = await this.prisma.registrationCode.create({
             data: { node_id: nodeId, code, created_by: createdBy, expires_at }
-        });
-
-        await this.prisma.auditLog.create({
-            data: {
-                event: 'REGISTRATION_CODE_GENERATED',
-                node_id: nodeId,
-                actor: createdBy,
-                metadata: { code }
-            }
         });
 
         return {

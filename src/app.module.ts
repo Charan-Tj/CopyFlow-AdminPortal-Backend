@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
@@ -10,9 +11,10 @@ import { PaymentModule } from './payment/payment.module';
 import { R2Module } from './r2/r2.module';
 import { NodeModule } from './node/node.module';
 import { WebFormModule } from './web-form/web-form.module';
+import { KioskApiModule } from './kiosk-api/kiosk-api.module';
 
 @Module({
-  imports: [PrismaModule, JobsModule, AdminModule, WhatsappModule, PrintModule, PaymentModule, R2Module, NodeModule, WebFormModule],
+  imports: [ScheduleModule.forRoot(), PrismaModule, JobsModule, AdminModule, WhatsappModule, PrintModule, PaymentModule, R2Module, NodeModule, WebFormModule, KioskApiModule],
   controllers: [AppController],
   providers: [AppService],
 })

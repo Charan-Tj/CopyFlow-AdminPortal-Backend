@@ -108,7 +108,8 @@ export class PaymentService {
                 pages: session.pages,
                 nodeId: session.nodeId,
                 jobId: session.jobId || `wa_${Date.now()}`,
-                sender: sender
+                sender: sender,
+                userName: session.userName
             };
 
             const printSuccess = await this.printService.sendJobToPrinter(jobData);

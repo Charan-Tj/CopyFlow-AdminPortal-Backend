@@ -309,22 +309,24 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
         }
     }
 
-    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any }> {
+    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any; userName?: string }> {
         try {
             const entry = body.entry?.[0];
             const changes = entry?.changes?.[0];
             const value = changes?.value;
+            const contact = value?.contacts?.[0];
+            const userName = String(contact?.profile?.name || '').trim() || undefined;
 
             // Ignore status updates (delivery receipts, read receipts, etc.)
             if (value?.statuses) {
                 this.logger.debug('Ignoring Meta status update (delivery/read receipt)');
-                return { sender: '', message: '' };
+                return { sender: '', message: '', userName };
             }
 
             const messageObj = value?.messages?.[0];
 
             if (!messageObj) {
-                return { sender: '', message: '' };
+                return { sender: '', message: '', userName };
             }
 
             // Always standardize back to the "whatsapp:+XXXXXXXXXXX" format that our app uses internally
@@ -360,7 +362,7 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
                 }
             }
 
-            return { sender, message, mediaUrl, mediaContentType, interactiveData };
+            return { sender, message, mediaUrl, mediaContentType, interactiveData, userName };
         } catch (error) {
             this.logger.error('Failed to parse Meta webhook format', error);
             return { sender: '', message: '' };

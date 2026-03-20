@@ -148,7 +148,7 @@ export class TwilioProvider implements WhatsappProvider, OnModuleInit {
         }
     }
 
-    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any }> {
+    async parseIncomingWebhook(body: any): Promise<{ sender: string; message: string; mediaUrl?: string; mediaContentType?: string; interactiveData?: any; userName?: string }> {
         const sender = body.From;
         const bodyText = body.Body;
         const numMedia = parseInt(body.NumMedia, 10) || 0;
