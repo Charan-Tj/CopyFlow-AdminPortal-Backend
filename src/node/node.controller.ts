@@ -59,13 +59,16 @@ export class NodeController {
     async getJobsHistory(
         @Request() req: any,
         @Query('limit') limit?: string,
+        @Query('offset') offset?: string,
         @Query('from') from?: string,
         @Query('to') to?: string
     ) {
         const nodeId = req.node.nodeId;
         const parsedLimit = Number.parseInt(String(limit || ''), 10);
         const finalLimit = Number.isFinite(parsedLimit) ? parsedLimit : 50;
-        return this.nodeService.getRecentJobs(nodeId, finalLimit, from, to);
+        const parsedOffset = Number.parseInt(String(offset || ''), 10);
+        const finalOffset = Number.isFinite(parsedOffset) ? parsedOffset : 0;
+        return this.nodeService.getRecentJobs(nodeId, finalLimit, from, to, finalOffset);
     }
 
     @UseGuards(NodeAuthGuard)
