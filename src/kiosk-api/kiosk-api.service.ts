@@ -559,7 +559,7 @@ export class KioskApiService {
           printers.push({
             name: onlinePrinters === 1 ? 'Printer' : `${onlinePrinters} Printers`,
             printerStatus: 'ONLINE',
-            inkLevel: minInkLevel !== null ? minInkLevel : 100,
+            inkLevel: minInkLevel,
             healthScore: 100,
             icon: 'online-printer',
           });
@@ -585,7 +585,8 @@ export class KioskApiService {
       const healthScore = this.toNumber(
         printer?.health_score ?? printer?.healthScore ?? 100,
       );
-      const ink = this.toNumber(printer?.ink_level ?? printer?.inkLevel ?? 100);
+      const rawInk = printer?.ink_level ?? printer?.inkLevel ?? null;
+      const ink = rawInk !== null ? this.toNumber(rawInk) : null;
 
       let online = true;
       if (printer?.is_online !== undefined) {
@@ -605,7 +606,7 @@ export class KioskApiService {
       return {
         name: String(printer?.name || printer?.printer_name || 'Printer'),
         printerStatus: online ? 'ONLINE' : 'OFFLINE',
-        inkLevel: Math.max(0, Math.min(100, Math.round(ink))),
+        inkLevel: ink !== null ? Math.max(0, Math.min(100, Math.round(ink))) : null,
         healthScore: Math.max(0, Math.min(100, Math.round(healthScore))),
         icon: online ? 'online-printer' : 'offline-printer',
       };
