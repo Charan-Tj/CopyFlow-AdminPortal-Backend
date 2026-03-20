@@ -160,7 +160,7 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
 
             const interactivePayload = {
                 type: "list",
-                header: { type: "text", text: "🏪 Available Print Shops" },
+                header: { type: "text", text: "Available Print Shops" },
                 body: { text: "Select the shop where you want to print your documents:" },
                 footer: { text: "Tap to view list" },
                 action: {
@@ -209,15 +209,15 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
             if (contentSid === 'cf_file_uploaded') {
                 const { fileNum, pages, totalPages, fileCount } = variables || {};
                 const bodyText = fileCount > 1
-                    ? `✅ File ${fileNum} received — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total so far: ${fileCount} files, ${totalPages} pages\n\n📌 Send more files, or tap Done when finished.`
-                    : `✅ File received — ${pages} page${pages > 1 ? 's' : ''}\n\n📌 Send more files, or tap Done when finished.`;
+                    ? `*File ${fileNum} received* — ${pages} page${pages > 1 ? 's' : ''}\n\nTotal so far: ${fileCount} files, ${totalPages} pages\n\nSend more files, or tap Done when finished.`
+                    : `*File received* — ${pages} page${pages > 1 ? 's' : ''}\n\nSend more files, or tap Done when finished.`;
 
                 interactivePayload = {
                     type: "button",
                     body: { text: bodyText },
                     action: {
                         buttons: [
-                            { type: "reply", reply: { id: "done_uploading", title: "✅ Done" } }
+                            { type: "reply", reply: { id: "done_uploading", title: "Done" } }
                         ]
                     }
                 };
@@ -228,16 +228,16 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
                     footer: { text: "Tap Confirm to generate your payment link" },
                     action: {
                         buttons: [
-                            { type: "reply", reply: { id: "confirm_pay", title: "✅ Confirm & Pay" } },
-                            { type: "reply", reply: { id: "edit_form", title: "✏️ Edit" } },
-                            { type: "reply", reply: { id: "cancel", title: "❌ Cancel" } }
+                            { type: "reply", reply: { id: "confirm_pay", title: "Confirm & Pay" } },
+                            { type: "reply", reply: { id: "edit_form", title: "Edit" } },
+                            { type: "reply", reply: { id: "cancel", title: "Cancel" } }
                         ]
                     }
                 };
             } else if (contentSid === 'cf_copies_list') {
                 interactivePayload = {
                     type: "list",
-                    header: { type: "text", text: "🖨️ Step 2 of 4: Copies" },
+                    header: { type: "text", text: "Step 2 of 4: Copies" },
                     body: { text: "How many copies of this document would you like?" },
                     footer: { text: "Tap to select" },
                     action: {
@@ -246,10 +246,10 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
                             {
                                 title: "Quick pick",
                                 rows: [
-                                    { id: "copies_1", title: "1️⃣  1 Copy", description: "Print one copy" },
-                                    { id: "copies_2", title: "2️⃣  2 Copies", description: "Print two copies" },
-                                    { id: "copies_3", title: "3️⃣  3 Copies", description: "Print three copies" },
-                                    { id: "copies_other", title: "🔢 Other", description: "Choose a custom amount" }
+                                    { id: "copies_1", title: "1 Copy", description: "Print one copy" },
+                                    { id: "copies_2", title: "2 Copies", description: "Print two copies" },
+                                    { id: "copies_3", title: "3 Copies", description: "Print three copies" },
+                                    { id: "copies_other", title: "Other", description: "Choose a custom amount" }
                                 ]
                             }
                         ]
@@ -258,24 +258,24 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
             } else if (contentSid === 'cf_color_quickrep') {
                 interactivePayload = {
                     type: "button",
-                    header: { type: "text", text: "🎨 Step 3 of 4: Print Type" },
+                    header: { type: "text", text: "Step 3 of 4: Print Type" },
                     body: { text: "Choose between Black & White or Color printing:" },
                     action: {
                         buttons: [
-                            { type: "reply", reply: { id: "bw", title: "⬛ B&W — ₹2/page" } },
-                            { type: "reply", reply: { id: "color", title: "🎨 Color — ₹10/page" } }
+                            { type: "reply", reply: { id: "bw", title: "B&W — ₹2/page" } },
+                            { type: "reply", reply: { id: "color", title: "Color — ₹10/page" } }
                         ]
                     }
                 };
             } else if (contentSid === 'cf_sides_quickrep') {
                 interactivePayload = {
                     type: "button",
-                    header: { type: "text", text: "📄 Step 4 of 4: Print Sides" },
+                    header: { type: "text", text: "Step 4 of 4: Print Sides" },
                     body: { text: "How do you want your pages printed?" },
                     action: {
                         buttons: [
-                            { type: "reply", reply: { id: "single", title: "📄 Single Sided" } },
-                            { type: "reply", reply: { id: "double", title: "📋 Double Sided" } }
+                            { type: "reply", reply: { id: "single", title: "Single Sided" } },
+                            { type: "reply", reply: { id: "double", title: "Double Sided" } }
                         ]
                     }
                 };

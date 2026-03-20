@@ -357,22 +357,17 @@ export class WhatsappService {
                 await this.sendTypingIndicator(sender);
 
                 if (activeNodes.length > 0) {
-                    let shopList = `Available shops:`;
-                    for (const n of activeNodes) {
-                        shopList += `\n\n*${n.node_code}* — ${n.name}\n${n.college}, ${n.city}`;
-                    }
-                    shopList += `\n\nReply: shop <code>   e.g. shop ${activeNodes[0].node_code}`;
-                    await this.sendTextMessage(sender, shopList);
+                    await this.resolveProvider(sender).sendShopSelector(sender, activeNodes);
+                } else {
+                    await this.sendTextMessage(sender, "No print shops are currently available.");
                 }
 
                 await this.sendButtonMessage(
                     sender,
-                    'Select a shop to get started, or upload a file directly if you already have one selected.',
+                    'Need assistance getting started?',
                     [
-                        { id: 'shops', label: 'Browse Shops' },
-                        { id: 'help',  label: 'Help' },
-                    ],
-                    'CopyFlow — Self-service Printing'
+                        { id: 'help',  label: 'Get Help' },
+                    ]
                 );
                 return null;
             }
@@ -437,20 +432,19 @@ export class WhatsappService {
                         await this.sendButtonMessage(
                             sender,
                             `*${node.name}* (${node.node_code})\n${node.college}, ${node.city}\n\n` +
-                            `This shop's kiosk is currently offline.\n` +
+                            `*This shop's kiosk is currently offline.*\n` +
                             `Reason: ${kioskStatus.reason}\n\n` +
                             `You can still upload your files — the shop may come back online by the time you pay.`,
                             [
                                 { id: 'shops', label: 'Pick Another Shop' },
                                 { id: 'help',  label: 'Help' },
                             ],
-                            'Shop Selected — Currently Offline',
-                            'Your files are safe. You can switch shops anytime.'
+                            'Shop Selected'
                         );
                     } else {
                         await this.sendButtonMessage(
                             sender,
-                            `*${node.name}* (${node.node_code})\n${node.college}, ${node.city}\n\nKiosk is online and ready to print. Send your files (PDF, Word, or image) to continue.`,
+                            `*${node.name}* (${node.node_code})\n${node.college}, ${node.city}\n\n*Kiosk is online and ready to print.*\n\n*Send your files* (PDF, Word, or image) to continue.`,
                             [
                                 { id: 'shops', label: 'Change Shop' },
                                 { id: 'help',  label: 'Help' },
@@ -466,10 +460,10 @@ export class WhatsappService {
                     });
 
                     if (activeNodes.length > 0) {
-                        await this.sendTextMessage(sender, `❌ Shop code "${shopCode}" was not found.`);
+                        await this.sendTextMessage(sender, `Shop code "${shopCode}" was not found.`);
                         await this.resolveProvider(sender).sendShopSelector(sender, activeNodes);
                     } else {
-                        await this.sendTextMessage(sender, `❌ Shop code "${shopCode}" was not found and there are no active shops available right now.`);
+                        await this.sendTextMessage(sender, `Shop code "${shopCode}" was not found and there are no active shops available right now.`);
                         await this.sendButtonMessage(sender,
                             'Need help?',
                             [{ id: 'help', label: 'Help' }, { id: 'cancel', label: 'Start Over' }]
@@ -572,7 +566,7 @@ export class WhatsappService {
                         await this.saveSession(sender, session);
                         await this.sendTypingIndicator(sender);
                         await this.sendTextMessage(sender,
-                            `Welcome to CopyFlow @ ${node.name}! 👋\n📍 ${node.college}, ${node.city}\n\nSend your files (PDF, Word, or image) to get started.\nYou can send multiple files — tap "Done" when finished.\n\n💡 Type HELP anytime if you get stuck.`
+                            `Welcome to CopyFlow @ ${node.name}!\n${node.college}, ${node.city}\n\n*Send your files* (PDF, Word, or image) to get started.\nYou can send multiple files — tap "Done" when finished.\n\nType HELP anytime if you get stuck.`
                         );
                     } else {
                         const activeNodes = await this.prisma.node.findMany({
@@ -580,11 +574,11 @@ export class WhatsappService {
                             select: { node_code: true, name: true, college: true, city: true },
                             take: 8,
                         });
-                        let errMsg = `❌ Invalid or expired QR code.`;
+                        let errMsg = `Invalid or expired QR code.`;
                         if (activeNodes.length > 0) {
-                            errMsg += `\n\n📍 Available shops:`;
+                            errMsg += `\n\nAvailable shops:`;
                             for (const n of activeNodes) {
-                                errMsg += `\n• ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
+                                errMsg += `\n- ${n.node_code} — ${n.name} (${n.college}, ${n.city})`;
                             }
                             errMsg += `\n\nType: shop <code> to select a shop manually.`;
                         }
@@ -647,8 +641,8 @@ export class WhatsappService {
                         await this.sendButtonMessage(
                             sender,
                             'Looks like you already sent this file. Send a different file or tap Done to continue.',
-                            [{ id: 'done_uploading', label: '✅ Done Uploading' }],
-                            '⚠️ Duplicate File'
+                            [{ id: 'done_uploading', label: 'Done Uploading' }],
+                            'Limit Exceeded'
                         );
                         return null;
                     }
