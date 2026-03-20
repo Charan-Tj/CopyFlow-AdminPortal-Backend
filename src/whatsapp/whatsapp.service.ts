@@ -20,7 +20,7 @@ interface UploadedFile {
 }
 
 interface ChatState {
-    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW' | 'AWAITING_CONFIRMATION' | 'AWAITING_PHONE' | 'PAID' | 'PRINTED';
+    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW' | 'AWAITING_CONFIRMATION' | 'AWAITING_PHONE' | 'PAID' | 'PRINTED' | 'AWAITING_TG_MATRIX';
     nodeId?: string;
     nodeCode?: string;
     files: UploadedFile[];
@@ -640,7 +640,18 @@ export class WhatsappService {
                         return null;
                     }
 
-                    // Telegram & all other channels: skip AWAITING_FLOW, go straight to copies
+                    if (sender.startsWith('telegram:')) {
+                        session.step = 'AWAITING_TG_MATRIX';
+                        session.copies = 1;
+                        session.color = false;
+                        session.sides = 'single';
+                        await this.saveSession(sender, session);
+                        await this.sendTypingIndicator(sender);
+                        await this.telegramProvider.sendSettingsMatrix(sender, session.copies, session.color, (session.sides as string) === 'double');
+                        return null;
+                    }
+
+                    // For web / other fallback channels:
                     session.step = 'AWAITING_COPIES';
                     await this.saveSession(sender, session);
                     await this.sendTypingIndicator(sender);
