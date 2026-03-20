@@ -42,7 +42,9 @@ export class CashfreeService {
 
         const returnUrl = this.resolveReturnUrl(source, referenceId);
 
-        const payload = {
+        const notifyUrl = process.env.CASHFREE_WEBHOOK_URL || '';
+
+        const payload: any = {
             order_id: referenceId,
             order_amount: amount,
             order_currency: 'INR',
@@ -55,6 +57,10 @@ export class CashfreeService {
                 return_url: returnUrl,
             },
         };
+
+        if (notifyUrl) {
+            payload.order_meta.notify_url = notifyUrl;
+        }
 
         this.logger.log(`Creating Cashfree order for referenceId: ${referenceId}`);
 

@@ -161,14 +161,14 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 {
                     parse_mode: 'Markdown',
                     reply_markup: {
-                        keyboard: [[{ text: '📱 Share My Phone Number', request_contact: true }]],
+                        keyboard: [[{ text: '📞 Share My Phone Number', request_contact: true }]],
                         resize_keyboard: true,
                         one_time_keyboard: true,
                     },
                 } as any
             );
-        } catch (err: any) {
-            this.logger.error(`sendPhoneRequest failed: ${err.message}`);
+        } catch (error: any) {
+            this.logger.error(`Error sending Telegram phone request: ${error.message}`);
             // Fallback: ask them to type it
             await this.sendTextMessage(to,
                 '📱 Please type your 10-digit mobile number so we can generate your payment link (e.g. 9876543210):'
@@ -176,21 +176,88 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         }
     }
 
+    /**
+     * Sends or updates the interactive Print Settings keyboard matrix.
+     */
+    async sendSettingsMatrix(
+        to: string,
+        copies: number,
+        isColor: boolean,
+        isDouble: boolean,
+        isUpdate: boolean = false,
+        messageId?: number,
+        isFinal: boolean = false
+    ): Promise<void> {
+        const chatId = this.formatTo(to);
+        if (isNaN(chatId) || !TelegramProvider.bot) return;
+
+        let body = `⚙️ *Print Settings*\n\nUse the buttons below to configure your print job.`;
+        if (isFinal) {
+            body = `✅ *Print Settings Confirmed*\n\nCopies: ${copies}\nColor: ${isColor ? 'Yes' : 'No'}\nDouble-sided: ${isDouble ? 'Yes' : 'No'}`;
+        }
+
+        const buttons = [
+            [
+                Markup.button.callback('➖', 'tg_mat_dec'),
+                Markup.button.callback(`${copies} Cop${copies === 1 ? 'y' : 'ies'}`, 'tg_mat_noop'),
+                Markup.button.callback('➕', 'tg_mat_inc'),
+            ],
+            [
+                Markup.button.callback(!isColor ? '☑️ Black & White' : '⬜ Black & White', 'tg_mat_bw'),
+                Markup.button.callback(isColor ? '☑️ Color' : '⬜ Color', 'tg_mat_col'),
+            ],
+            [
+                Markup.button.callback(!isDouble ? '☑️ Single Sided' : '⬜ Single Sided', 'tg_mat_ss'),
+                Markup.button.callback(isDouble ? '☑️ Double Sided' : '⬜ Double Sided', 'tg_mat_ds'),
+            ]
+        ];
+
+        if (!isFinal) {
+            buttons.push([Markup.button.callback('✅ Confirm & Pay', 'tg_mat_submit')]);
+        }
+
+        const markup = isFinal ? Markup.inlineKeyboard([]) : Markup.inlineKeyboard(buttons);
+
+        try {
+            if (isUpdate && messageId) {
+                await TelegramProvider.bot.telegram.editMessageText(chatId, messageId, undefined, body, {
+                    parse_mode: 'Markdown',
+                    ...markup
+                });
+            } else {
+                await TelegramProvider.bot.telegram.sendMessage(chatId, body, {
+                    parse_mode: 'Markdown',
+                    ...markup
+                });
+            }
+        } catch (err: any) {
+            try {
+                const plainBody = body.replace(/[*_~`]/g, '');
+                if (isUpdate && messageId) {
+                    await TelegramProvider.bot.telegram.editMessageText(chatId, messageId, undefined, plainBody, markup);
+                } else {
+                    await TelegramProvider.bot.telegram.sendMessage(chatId, plainBody, markup);
+                }
+            } catch (e2) {}
+        }
+    }
+
     async sendTextMessage(to: string, body: string): Promise<void> {
+        if (!TelegramProvider.bot) return;
+
         try {
             const chatId = this.formatTo(to);
-            if (isNaN(chatId) || !TelegramProvider.bot) return;
-            await TelegramProvider.bot.telegram.sendMessage(chatId, body, { parse_mode: 'Markdown' });
-        } catch (error: any) {
-            // Markdown parse can fail on special chars — retry as plain text
-            try {
-                const chatId = this.formatTo(to);
-                if (!isNaN(chatId) && TelegramProvider.bot) {
-                    await TelegramProvider.bot.telegram.sendMessage(chatId, body);
+            if (!isNaN(chatId)) {
+                try {
+                    await TelegramProvider.bot.telegram.sendMessage(chatId, body, { parse_mode: 'Markdown' });
+                } catch (err: any) {
+                    // If Markdown parsing fails, send as plain text, removing common Markdown characters
+                    this.logger.warn(`Markdown failed for text message, retrying plain: ${err.message}`);
+                    await TelegramProvider.bot.telegram.sendMessage(chatId, body.replace(/[*_~`]/g, ''));
                 }
-            } catch (e2: any) {
-                this.logger.error(`Error sending Telegram msg: ${(e2 as any).message}`);
             }
+        } catch (e2: any) {
+            this.logger.error(`Error sending Telegram msg: ${(e2 as any).message}`);
         }
     }
 
@@ -398,6 +465,9 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
             } else if (body.type === 'callback') {
                 const cbQuery = ctx.callbackQuery as any;
                 message = cbQuery.data || '';
+                if (cbQuery.message && cbQuery.message.message_id) {
+                    interactiveData = { messageId: cbQuery.message.message_id };
+                }
             }
 
             return { sender, message, mediaUrl, mediaContentType, interactiveData, userName };

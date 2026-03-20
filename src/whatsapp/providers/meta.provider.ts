@@ -65,8 +65,8 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
     }
 
     private formatTo(to: string): string {
-        // Meta requires clean international format without "whatsapp:" prefix or "+" sign
-        return to.replace('whatsapp:', '').replace('+', '');
+        // Meta requires clean international format without internal prefixes or "+" signs
+        return to.replace(/^(whatsapp:|web:|telegram:)/i, '').replace(/\+/g, '');
     }
 
     async sendTextMessage(to: string, body: string): Promise<void> {
@@ -147,6 +147,58 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
         } catch (error: any) {
             this.logger.error(`Error sending Meta button message: ${error.message}`);
             await this.sendTextMessage(to, `${body}\n\n${buttons.map(b => b.label).join(' | ')}`);
+        }
+    }
+
+    async sendShopSelector(to: string, nodes: { node_code: string; name: string; college: string; city: string }[]): Promise<void> {
+        try {
+            const rows = nodes.slice(0, 10).map(n => ({
+                id: `shop ${n.node_code}`,
+                title: n.node_code.substring(0, 24),
+                description: `${n.name} - ${n.college}`.substring(0, 72)
+            }));
+
+            const interactivePayload = {
+                type: "list",
+                header: { type: "text", text: "🏪 Available Print Shops" },
+                body: { text: "Select the shop where you want to print your documents:" },
+                footer: { text: "Tap to view list" },
+                action: {
+                    button: "View Shops",
+                    sections: [
+                        {
+                            title: "Shops nearby",
+                            rows: rows
+                        }
+                    ]
+                }
+            };
+
+            const payload = {
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual',
+                to: this.formatTo(to),
+                type: 'interactive',
+                interactive: interactivePayload
+            };
+
+            const response = await axios.post(this.getApiUrl(), payload, {
+                headers: this.getHeaders(),
+                validateStatus: null,
+            });
+
+            if (response.status !== 200) {
+                this.logger.error(`Meta shop list returned ${response.status}: ${JSON.stringify(response.data)}`);
+                // Fallback to text
+                let msg = `*Available Print Shops* (${nodes.length})`;
+                for (const n of nodes) {
+                    msg += `\n\n*${n.node_code}* — ${n.name}\n${n.college}, ${n.city}`;
+                }
+                msg += `\n\nReply: shop <code>`;
+                await this.sendTextMessage(to, msg);
+            }
+        } catch (error: any) {
+            this.logger.error(`Error sending Meta shop list: ${error.message}`);
         }
     }
 
