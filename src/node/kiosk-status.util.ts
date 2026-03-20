@@ -34,6 +34,18 @@ function parseHeartbeatMs(lastHeartbeat?: Date | string | null): number | null {
 }
 
 function countPrinters(printerList: unknown): { total: number; online: number } {
+  // Handle new summary format
+  if (printerList && typeof printerList === 'object' && !Array.isArray(printerList)) {
+    const summary = printerList as Record<string, unknown>;
+    if (typeof summary.totalPrinters === 'number' && typeof summary.onlinePrinters === 'number') {
+      return {
+        total: summary.totalPrinters,
+        online: summary.onlinePrinters
+      };
+    }
+  }
+
+  // Handle old array format
   if (!Array.isArray(printerList)) {
     return { total: 0, online: 0 };
   }

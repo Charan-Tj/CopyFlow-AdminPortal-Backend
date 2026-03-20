@@ -182,20 +182,29 @@ export class NodeService {
         const eventTime = time ? new Date(time) : new Date();
 
         if (type === 'PRINTER_STATUS') {
-            const printers = Array.isArray(payload?.printers) ? payload.printers : [];
-            const hasLowConsumables = printers.some((printer: any) => {
-                const supplies = Array.isArray(printer?.consumables) ? printer.consumables : [];
-                return supplies.some((supply: any) => Number(supply?.percent ?? 100) <= 15);
-            });
+            const printerData = payload?.printers;
+            let hasLowConsumables = false;
+
+            // Handle new summary format
+            if (printerData && typeof printerData === 'object' && !Array.isArray(printerData)) {
+                hasLowConsumables = Boolean(printerData.hasLowInk);
+            }
+            // Handle old array format
+            else if (Array.isArray(printerData)) {
+                hasLowConsumables = printerData.some((printer: any) => {
+                    const supplies = Array.isArray(printer?.consumables) ? printer.consumables : [];
+                    return supplies.some((supply: any) => Number(supply?.percent ?? 100) <= 15);
+                });
+            }
 
             const kiosk = await this.getOrCreateKiosk(nodeId);
             await this.prisma.kiosk.update({
                 where: { pi_id: kiosk.pi_id },
                 data: {
                     last_heartbeat: eventTime,
-                    printer_list: printers,
+                    printer_list: printerData,
                     paper_level: hasLowConsumables ? 'LOW' : 'HIGH',
-                    runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printers)
+                    runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printerData)
                 }
             });
         }
