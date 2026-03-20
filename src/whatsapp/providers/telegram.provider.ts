@@ -193,13 +193,31 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 rows.push(row);
             }
 
-            await TelegramProvider.bot.telegram.sendMessage(chatId, fullText, {
-                ...Markup.inlineKeyboard(rows),
-                parse_mode: 'Markdown',
-            });
+            const keyboard = Markup.inlineKeyboard(rows);
+
+            try {
+                // First attempt: with Markdown formatting
+                await TelegramProvider.bot.telegram.sendMessage(chatId, fullText, {
+                    ...keyboard,
+                    parse_mode: 'Markdown',
+                });
+            } catch (markdownErr: any) {
+                // Markdown failed (e.g. unescaped quotes in gateway error strings)
+                // Retry WITHOUT parse_mode so buttons still appear as real buttons
+                this.logger.warn(`Markdown failed for button message, retrying plain: ${markdownErr.message}`);
+                const plainText = [
+                    header || '',
+                    body,
+                    footer || '',
+                ].filter(Boolean).join('\n\n');
+                await TelegramProvider.bot.telegram.sendMessage(chatId, plainText, {
+                    ...keyboard,
+                    // no parse_mode — plain text always works
+                });
+            }
         } catch (error: any) {
             this.logger.error(`Error sending Telegram button message: ${error.message}`);
-            // Fallback: plain text with button labels listed
+            // Last resort: plain text with button labels listed (no keyboard at all)
             const btns = buttons.map(b => b.label).join(' | ');
             await this.sendTextMessage(to, `${body}\n\n${btns}`);
         }
