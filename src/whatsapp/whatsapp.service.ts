@@ -466,6 +466,7 @@ export class WhatsappService {
 
                 if (normalizedMessage === 'hi-flow') {
                     session.useFlow = true;
+                    await this.saveSession(sender, session);
                     await this.sendTypingIndicator(sender);
                     await this.sendTextMessage(sender, "Interactive Flow mode activated! Please upload your documents to begin.");
                     return null;
@@ -600,7 +601,6 @@ export class WhatsappService {
                     return null;
                 }
 
-                let copies = 1;
                 if (normalizedMessage === 'other' || normalizedMessage === 'copies_other') {
                     session.awaitingCustomCopies = true;
                     await this.saveSession(sender, session);
@@ -613,15 +613,32 @@ export class WhatsappService {
                     }
                 }
 
+                let copies: number | undefined;
                 const match = normalizedMessage.match(/\d+/);
                 if (match) {
-                    copies = parseInt(match[0], 10);
+                    const num = parseInt(match[0], 10);
+                    // Validate range for all numeric inputs
+                    if (num < 1 || num > 99) {
+                        await this.sendTypingIndicator(sender);
+                        await this.sendTextMessage(sender, '❌ Please enter a number between 1 and 99.');
+                        await this.sendContentMessage(sender, 'cf_copies_list');
+                        return null;
+                    }
+                    copies = num;
                 } else if (normalizedMessage.includes('1 copy') || message === '1') copies = 1;
                 else if (normalizedMessage.includes('2 copies') || message === '2') copies = 2;
                 else if (normalizedMessage.includes('3 copies') || message === '3') copies = 3;
                 else if (normalizedMessage === 'copies_1') copies = 1;
                 else if (normalizedMessage === 'copies_2') copies = 2;
                 else if (normalizedMessage === 'copies_3') copies = 3;
+
+                // Reject invalid input instead of defaulting to 1
+                if (copies === undefined) {
+                    await this.sendTypingIndicator(sender);
+                    await this.sendTextMessage(sender, '❓ Please select how many copies you need.\n\n💡 Type *MENU* if you need help.');
+                    await this.sendContentMessage(sender, 'cf_copies_list');
+                    return null;
+                }
 
                 session.copies = copies;
                 session.step = 'AWAITING_COLOR';
@@ -634,9 +651,13 @@ export class WhatsappService {
             }
 
             if (session.step === 'AWAITING_COLOR') {
-                if (normalizedMessage.includes('color') || message === 'color') {
+                // Use exact matching to avoid false positives like "not color" triggering color=true
+                const validColorInputs = ['color', 'colour'];
+                const validBWInputs = ['bw', 'b&w', 'black', 'black & white', 'black and white', 'blackandwhite'];
+
+                if (validColorInputs.includes(normalizedMessage) || message === 'color') {
                     session.color = true;
-                } else if (normalizedMessage.includes('black') || normalizedMessage.includes('b&w') || message === 'bw') {
+                } else if (validBWInputs.includes(normalizedMessage) || message === 'bw') {
                     session.color = false;
                 } else {
                     // HCI: Graceful fallback — resend options with explanation
@@ -656,9 +677,13 @@ export class WhatsappService {
             }
 
             if (session.step === 'AWAITING_SIDES') {
-                if (normalizedMessage.includes('double') || message === 'double') {
+                // Use exact matching to avoid false positives like "I don't want double" triggering double=true
+                const validDoubleInputs = ['double', 'double sided', 'double-sided', 'doublesided'];
+                const validSingleInputs = ['single', 'single sided', 'single-sided', 'singlesided'];
+
+                if (validDoubleInputs.includes(normalizedMessage) || message === 'double') {
                     session.sides = 'double';
-                } else if (normalizedMessage.includes('single') || message === 'single') {
+                } else if (validSingleInputs.includes(normalizedMessage) || message === 'single') {
                     session.sides = 'single';
                 } else {
                     // HCI: Graceful fallback — resend with context
@@ -755,9 +780,9 @@ export class WhatsappService {
                 }
 
                 if (!msgLinks) {
-                    session.step = 'AWAITING_SIDES';
+                    session.step = 'AWAITING_CONFIRMATION';
                     await this.saveSession(sender, session);
-                    const noLinkMsg = 'Payment link is not available right now. Please choose sides again to regenerate links.';
+                    const noLinkMsg = 'Payment link is not available right now. Type *YES* to try generating it again, or *CANCEL* to start over.';
                     try {
                         await this.sendTypingIndicator(sender);
                         await this.sendTextMessage(sender, noLinkMsg);
@@ -800,7 +825,7 @@ export class WhatsappService {
      * Analyzes a single file that was uploaded by a user.
      */
     async processPdfInQueue(sender: string, mediaUrl: string, mediaContentType: string, fileNum: number): Promise<void> {
-        const session = this.getSession(sender);
+        const session = await this.loadSession(sender);
         if (!session) {
             this.logger.warn(`processPdfInQueue: no active session for ${sender}, skipping.`);
             return;
@@ -912,6 +937,7 @@ export class WhatsappService {
             const kioskStatus = await this.getNodeKioskStatusSnapshot(session.nodeId, session.nodeCode);
             if (!kioskStatus.isPrintingReady) {
                 // Issue 6: kiosk offline — preserve all preferences, keep in AWAITING_CONFIRMATION
+                session.step = 'AWAITING_CONFIRMATION';
                 session.kioskBlockedAt = Date.now();
                 await this.saveSession(sender, session);
 
@@ -1099,9 +1125,7 @@ export class WhatsappService {
             }
         }
 
-        // Remove session from cache and DB
-        await this.deleteSession(to);
-
+        // Send message BEFORE deleting session to allow retry if message fails
         try {
             // HCI: Status update — final confirmation so user knows it's done
             await this.sendTextMessage(to,
@@ -1111,9 +1135,13 @@ export class WhatsappService {
                 'Send a new file anytime to print again.'
             );
             this.logger.log(`Successfully sent print confirmation to ${to}`);
+
+            // Only delete session after successful message delivery
+            await this.deleteSession(to);
             return true;
         } catch (error: any) {
             this.logger.error(`Failed to send WhatsApp confirmation. Error: ${error.message}`);
+            // Keep session so we can retry later
             return false;
         }
     }
