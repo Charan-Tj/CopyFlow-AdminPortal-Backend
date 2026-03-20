@@ -100,21 +100,69 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
         }
     }
 
+    /**
+     * Send a message with 1–3 quick-reply buttons (Meta interactive button message).
+     * @param buttons max 3 items; each label must be ≤20 chars for Meta
+     */
+    async sendButtonMessage(
+        to: string,
+        body: string,
+        buttons: { id: string; label: string }[],
+        header?: string,
+        footer?: string,
+    ): Promise<void> {
+        try {
+            const metaButtons = buttons.slice(0, 3).map(b => ({
+                type: 'reply',
+                reply: { id: b.id, title: b.label.slice(0, 20) },
+            }));
+
+            const interactivePayload: any = {
+                type: 'button',
+                body: { text: body },
+                action: { buttons: metaButtons },
+            };
+            if (header) interactivePayload.header = { type: 'text', text: header.slice(0, 60) };
+            if (footer) interactivePayload.footer = { text: footer.slice(0, 60) };
+
+            const payload = {
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual',
+                to: this.formatTo(to),
+                type: 'interactive',
+                interactive: interactivePayload,
+            };
+
+            const response = await axios.post(this.getApiUrl(), payload, {
+                headers: this.getHeaders(),
+                validateStatus: null,
+            });
+
+            if (response.status !== 200) {
+                const errDetail = response.data?.error?.message || JSON.stringify(response.data);
+                this.logger.error(`Meta button API returned ${response.status}: ${errDetail}`);
+                // Fallback: plain text
+                await this.sendTextMessage(to, `${body}\n\n${buttons.map(b => b.label).join(' | ')}`);
+            }
+        } catch (error: any) {
+            this.logger.error(`Error sending Meta button message: ${error.message}`);
+            await this.sendTextMessage(to, `${body}\n\n${buttons.map(b => b.label).join(' | ')}`);
+        }
+    }
+
     async sendContentMessage(to: string, contentSid: string, variables?: any): Promise<void> {
         try {
             let interactivePayload: any;
 
             if (contentSid === 'cf_file_uploaded') {
-                // Rich file upload confirmation — mirrors the Telegram provider behavior
                 const { fileNum, pages, totalPages, fileCount } = variables || {};
-                const summary = fileCount > 1
-                    ? `✅ File ${fileNum} received — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total: ${fileCount} files, ${totalPages} pages`
-                    : `✅ File received — ${pages} page${pages > 1 ? 's' : ''}`;
+                const bodyText = fileCount > 1
+                    ? `✅ File ${fileNum} received — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total so far: ${fileCount} files, ${totalPages} pages\n\n📌 Send more files, or tap Done when finished.`
+                    : `✅ File received — ${pages} page${pages > 1 ? 's' : ''}\n\n📌 Send more files, or tap Done when finished.`;
 
                 interactivePayload = {
                     type: "button",
-                    body: { text: "Send more files or tap 'Done' when finished." },
-                    header: { type: "text", text: summary },
+                    body: { text: bodyText },
                     action: {
                         buttons: [
                             { type: "reply", reply: { id: "done_uploading", title: "✅ Done" } }
@@ -125,29 +173,31 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
                 interactivePayload = {
                     type: "button",
                     body: { text: variables?.summary || "Order Summary" },
+                    footer: { text: "Tap Confirm to generate your payment link" },
                     action: {
                         buttons: [
                             { type: "reply", reply: { id: "confirm_pay", title: "✅ Confirm & Pay" } },
-                            { type: "reply", reply: { id: "edit_form", title: "✏️ Edit Form" } }
+                            { type: "reply", reply: { id: "edit_form", title: "✏️ Edit" } },
+                            { type: "reply", reply: { id: "cancel", title: "❌ Cancel" } }
                         ]
                     }
                 };
             } else if (contentSid === 'cf_copies_list') {
                 interactivePayload = {
                     type: "list",
-                    header: { type: "text", text: "Copies" },
+                    header: { type: "text", text: "🖨️ Step 2 of 4: Copies" },
                     body: { text: "How many copies of this document would you like?" },
-                    footer: { text: "Select an option" },
+                    footer: { text: "Tap to select" },
                     action: {
                         button: "Select Copies",
                         sections: [
                             {
-                                title: "Amount",
+                                title: "Quick pick",
                                 rows: [
-                                    { id: "copies_1", title: "1 Copy", description: "One copy" },
-                                    { id: "copies_2", title: "2 Copies", description: "Two copies" },
-                                    { id: "copies_3", title: "3 Copies", description: "Three copies" },
-                                    { id: "copies_other", title: "Other", description: "A different amount" }
+                                    { id: "copies_1", title: "1️⃣  1 Copy", description: "Print one copy" },
+                                    { id: "copies_2", title: "2️⃣  2 Copies", description: "Print two copies" },
+                                    { id: "copies_3", title: "3️⃣  3 Copies", description: "Print three copies" },
+                                    { id: "copies_other", title: "🔢 Other", description: "Choose a custom amount" }
                                 ]
                             }
                         ]
@@ -156,22 +206,24 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
             } else if (contentSid === 'cf_color_quickrep') {
                 interactivePayload = {
                     type: "button",
-                    body: { text: "What type of print do you want?" },
+                    header: { type: "text", text: "🎨 Step 3 of 4: Print Type" },
+                    body: { text: "Choose between Black & White or Color printing:" },
                     action: {
                         buttons: [
-                            { type: "reply", reply: { id: "bw", title: "Black & White (₹2)" } },
-                            { type: "reply", reply: { id: "color", title: "Color (₹10)" } }
+                            { type: "reply", reply: { id: "bw", title: "⬛ B&W — ₹2/page" } },
+                            { type: "reply", reply: { id: "color", title: "🎨 Color — ₹10/page" } }
                         ]
                     }
                 };
             } else if (contentSid === 'cf_sides_quickrep') {
                 interactivePayload = {
                     type: "button",
-                    body: { text: "Would you like single-sided or double-sided printing?" },
+                    header: { type: "text", text: "📄 Step 4 of 4: Print Sides" },
+                    body: { text: "How do you want your pages printed?" },
                     action: {
                         buttons: [
-                            { type: "reply", reply: { id: "single", title: "Single Sided" } },
-                            { type: "reply", reply: { id: "double", title: "Double Sided" } }
+                            { type: "reply", reply: { id: "single", title: "📄 Single Sided" } },
+                            { type: "reply", reply: { id: "double", title: "📋 Double Sided" } }
                         ]
                     }
                 };

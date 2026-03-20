@@ -150,9 +150,58 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
         try {
             const chatId = this.formatTo(to);
             if (isNaN(chatId) || !TelegramProvider.bot) return;
-            await TelegramProvider.bot.telegram.sendMessage(chatId, body);
+            await TelegramProvider.bot.telegram.sendMessage(chatId, body, { parse_mode: 'Markdown' });
         } catch (error: any) {
-            this.logger.error(`Error sending Telegram msg: ${error.message}`);
+            // Markdown parse can fail on special chars — retry as plain text
+            try {
+                const chatId = this.formatTo(to);
+                if (!isNaN(chatId) && TelegramProvider.bot) {
+                    await TelegramProvider.bot.telegram.sendMessage(chatId, body);
+                }
+            } catch (e2: any) {
+                this.logger.error(`Error sending Telegram msg: ${(e2 as any).message}`);
+            }
+        }
+    }
+
+    /**
+     * Send a message with up to 3 quick-reply inline keyboard buttons.
+     * Buttons are arranged in rows of 2 across, last one centered if odd count.
+     */
+    async sendButtonMessage(
+        to: string,
+        body: string,
+        buttons: { id: string; label: string }[],
+        header?: string,
+        footer?: string,
+    ): Promise<void> {
+        try {
+            const chatId = this.formatTo(to);
+            if (isNaN(chatId) || !TelegramProvider.bot) return;
+
+            const fullText = [
+                header ? `*${header}*` : '',
+                body,
+                footer ? `_${footer}_` : '',
+            ].filter(Boolean).join('\n\n');
+
+            // Build rows: pair buttons 2-per-row
+            const rows: any[] = [];
+            for (let i = 0; i < buttons.length; i += 2) {
+                const row = [Markup.button.callback(buttons[i].label, buttons[i].id)];
+                if (buttons[i + 1]) row.push(Markup.button.callback(buttons[i + 1].label, buttons[i + 1].id));
+                rows.push(row);
+            }
+
+            await TelegramProvider.bot.telegram.sendMessage(chatId, fullText, {
+                ...Markup.inlineKeyboard(rows),
+                parse_mode: 'Markdown',
+            });
+        } catch (error: any) {
+            this.logger.error(`Error sending Telegram button message: ${error.message}`);
+            // Fallback: plain text with button labels listed
+            const btns = buttons.map(b => b.label).join(' | ');
+            await this.sendTextMessage(to, `${body}\n\n${btns}`);
         }
     }
 
@@ -164,43 +213,65 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
             if (contentSid === 'cf_file_uploaded') {
                 const { fileNum, pages, totalPages, fileCount } = variables || {};
                 const summary = fileCount > 1
-                    ? `✅ File ${fileNum} received — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total: ${fileCount} files, ${totalPages} pages`
-                    : `✅ File received — ${pages} page${pages > 1 ? 's' : ''}`;
+                    ? `✅ *File ${fileNum} received* — ${pages} page${pages > 1 ? 's' : ''}\n\n📁 Total: *${fileCount} files, ${totalPages} pages*`
+                    : `✅ *File received* — ${pages} page${pages > 1 ? 's' : ''}`;
 
-                await TelegramProvider.bot.telegram.sendMessage(chatId, `${summary}\n\nSend more files or tap "Done" to continue.`,
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('✅ Done — Proceed to Print', 'done_uploading')],
-                    ])
+                await TelegramProvider.bot.telegram.sendMessage(
+                    chatId,
+                    `${summary}\n\n📌 Send more files, or tap *Done* when finished.`,
+                    {
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('✅ Done — Continue to Print', 'done_uploading')],
+                        ]),
+                        parse_mode: 'Markdown',
+                    }
                 );
             } else if (contentSid === 'cf_order_confirm') {
-                await TelegramProvider.bot.telegram.sendMessage(chatId, variables?.summary || 'Order Summary',
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('✅ Confirm & Pay', 'confirm_pay')],
-                        [Markup.button.callback('✏️ Edit Form', 'edit_form')]
-                    ])
+                await TelegramProvider.bot.telegram.sendMessage(
+                    chatId,
+                    variables?.summary || 'Order Summary',
+                    {
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('✅ Confirm & Pay', 'confirm_pay')],
+                            [Markup.button.callback('✏️ Edit Preferences', 'edit_form'), Markup.button.callback('❌ Cancel', 'cancel')],
+                        ]),
+                        parse_mode: 'Markdown',
+                    }
                 );
             } else if (contentSid === 'cf_copies_list') {
-                await TelegramProvider.bot.telegram.sendMessage(chatId, 'How many copies of this document would you like?',
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('1 Copy', 'copies_1')],
-                        [Markup.button.callback('2 Copies', 'copies_2')],
-                        [Markup.button.callback('3 Copies', 'copies_3')],
-                        [Markup.button.callback('Other', 'copies_other')]
-                    ])
+                await TelegramProvider.bot.telegram.sendMessage(
+                    chatId,
+                    '🖨️ *Step 2 of 4:* How many copies do you need?',
+                    {
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('1️⃣  1 Copy', 'copies_1'), Markup.button.callback('2️⃣  2 Copies', 'copies_2')],
+                            [Markup.button.callback('3️⃣  3 Copies', 'copies_3'), Markup.button.callback('🔢 Other', 'copies_other')],
+                        ]),
+                        parse_mode: 'Markdown',
+                    }
                 );
             } else if (contentSid === 'cf_color_quickrep') {
-                await TelegramProvider.bot.telegram.sendMessage(chatId, 'What type of print do you want?',
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('Black & White (₹2)', 'bw')],
-                        [Markup.button.callback('Color (₹10)', 'color')]
-                    ])
+                await TelegramProvider.bot.telegram.sendMessage(
+                    chatId,
+                    '🎨 *Step 3 of 4:* Choose print type:',
+                    {
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('⬛ Black & White  ₹2/page', 'bw')],
+                            [Markup.button.callback('🎨 Color  ₹10/page', 'color')],
+                        ]),
+                        parse_mode: 'Markdown',
+                    }
                 );
             } else if (contentSid === 'cf_sides_quickrep') {
-                await TelegramProvider.bot.telegram.sendMessage(chatId, 'Would you like single-sided or double-sided printing?',
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('Single Sided', 'single')],
-                        [Markup.button.callback('Double Sided', 'double')]
-                    ])
+                await TelegramProvider.bot.telegram.sendMessage(
+                    chatId,
+                    '📄 *Step 4 of 4:* Choose print sides:',
+                    {
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('📄 Single Sided', 'single'), Markup.button.callback('📋 Double Sided', 'double')],
+                        ]),
+                        parse_mode: 'Markdown',
+                    }
                 );
             } else {
                 await this.sendTextMessage(to, "Please reply manually to select your options.");
