@@ -125,6 +125,41 @@ export class NodeService {
         };
     }
 
+    async getRecentJobs(nodeId: string, limit = 50) {
+        const take = Math.min(200, Math.max(1, Number(limit) || 50));
+
+        const jobs = await this.prisma.printJob.findMany({
+            where: {
+                node_id: nodeId,
+                status: { in: ['PRINTED', 'FAILED'] }
+            },
+            orderBy: {
+                updatedAt: 'desc'
+            },
+            take
+        });
+
+        return {
+            jobs: jobs.map((job) => ({
+                job_id: job.job_id,
+                user_name: job.user_name,
+                phone_number: job.phone_number,
+                document_name: job.document_name,
+                page_count: job.page_count,
+                copies: job.copies,
+                sides: job.sides,
+                color_mode: job.color_mode,
+                payable_amount: job.payable_amount,
+                status: job.status,
+                assigned_printer: job.assigned_printer,
+                error_category: job.error_category,
+                error_message: job.error_message,
+                createdAt: job.createdAt,
+                updatedAt: job.updatedAt
+            }))
+        };
+    }
+
     async ingestAgentEvent(nodeId: string, type: string, payload: any, time?: string) {
         if (!type) {
             throw new BadRequestException('Event type is required');
