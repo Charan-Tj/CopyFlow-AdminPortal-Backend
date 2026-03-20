@@ -56,11 +56,16 @@ export class NodeController {
     @UseGuards(NodeAuthGuard)
     @Get('jobs/history')
     @ApiOperation({ summary: 'Get recent completed jobs for the node' })
-    async getJobsHistory(@Request() req: any, @Query('limit') limit?: string) {
+    async getJobsHistory(
+        @Request() req: any,
+        @Query('limit') limit?: string,
+        @Query('from') from?: string,
+        @Query('to') to?: string
+    ) {
         const nodeId = req.node.nodeId;
         const parsedLimit = Number.parseInt(String(limit || ''), 10);
         const finalLimit = Number.isFinite(parsedLimit) ? parsedLimit : 50;
-        return this.nodeService.getRecentJobs(nodeId, finalLimit);
+        return this.nodeService.getRecentJobs(nodeId, finalLimit, from, to);
     }
 
     @UseGuards(NodeAuthGuard)
