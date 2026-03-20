@@ -177,20 +177,21 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
     }
 
     async sendTextMessage(to: string, body: string): Promise<void> {
+        if (!TelegramProvider.bot) return;
+
         try {
             const chatId = this.formatTo(to);
-            if (isNaN(chatId) || !TelegramProvider.bot) return;
-            await TelegramProvider.bot.telegram.sendMessage(chatId, body, { parse_mode: 'Markdown' });
-        } catch (error: any) {
-            // Markdown parse can fail on special chars — retry as plain text
-            try {
-                const chatId = this.formatTo(to);
-                if (!isNaN(chatId) && TelegramProvider.bot) {
-                    await TelegramProvider.bot.telegram.sendMessage(chatId, body);
+            if (!isNaN(chatId)) {
+                try {
+                    await TelegramProvider.bot.telegram.sendMessage(chatId, body, { parse_mode: 'Markdown' });
+                } catch (err: any) {
+                    // If Markdown parsing fails, send as plain text, removing common Markdown characters
+                    this.logger.warn(`Markdown failed for text message, retrying plain: ${err.message}`);
+                    await TelegramProvider.bot.telegram.sendMessage(chatId, body.replace(/[*_~`]/g, ''));
                 }
-            } catch (e2: any) {
-                this.logger.error(`Error sending Telegram msg: ${(e2 as any).message}`);
             }
+        } catch (e2: any) {
+            this.logger.error(`Error sending Telegram msg: ${(e2 as any).message}`);
         }
     }
 

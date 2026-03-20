@@ -616,14 +616,6 @@ export class WhatsappService {
                     return null;
                 }
 
-                if (normalizedMessage === 'hi-flow') {
-                    session.useFlow = true;
-                    await this.saveSession(sender, session);
-                    await this.sendTypingIndicator(sender);
-                    await this.sendTextMessage(sender, "Interactive Flow mode activated! Please upload your documents to begin.");
-                    return null;
-                }
-
                 // User taps "Done" — move to copies selection
                 if (normalizedMessage === 'done' || normalizedMessage === 'done_uploading') {
                     if (session.files.length === 0) {
@@ -639,7 +631,7 @@ export class WhatsappService {
                     // Calculate total pages
                     session.pages = session.files.reduce((sum, f) => sum + f.pages, 0);
 
-                    if (session.useFlow && sender.startsWith('whatsapp:')) {
+                    if (sender.startsWith('whatsapp:')) {
                         // Meta WhatsApp: send the Native Flow interactive form
                         session.step = 'AWAITING_FLOW';
                         await this.saveSession(sender, session);

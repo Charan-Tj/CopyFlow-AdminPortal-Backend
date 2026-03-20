@@ -65,8 +65,8 @@ export class MetaProvider implements WhatsappProvider, OnModuleInit {
     }
 
     private formatTo(to: string): string {
-        // Meta requires clean international format without "whatsapp:" prefix or "+" sign
-        return to.replace('whatsapp:', '').replace('+', '');
+        // Meta requires clean international format without internal prefixes or "+" signs
+        return to.replace(/^(whatsapp:|web:|telegram:)/i, '').replace(/\+/g, '');
     }
 
     async sendTextMessage(to: string, body: string): Promise<void> {
