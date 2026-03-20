@@ -20,7 +20,7 @@ interface UploadedFile {
 }
 
 interface ChatState {
-    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW' | 'AWAITING_CONFIRMATION' | 'PAID' | 'PRINTED';
+    step: 'AWAITING_FILE' | 'AWAITING_COPIES' | 'AWAITING_COLOR' | 'AWAITING_SIDES' | 'AWAITING_PAYMENT' | 'AWAITING_FLOW' | 'AWAITING_CONFIRMATION' | 'AWAITING_PHONE' | 'PAID' | 'PRINTED';
     nodeId?: string;
     nodeCode?: string;
     files: UploadedFile[];
@@ -44,6 +44,8 @@ interface ChatState {
     _pendingUrls?: string[];
     // Issue 6: kiosk offline — preserve preferences
     kioskBlockedAt?: number;
+    // Phone number collected from Telegram users for payment gateways
+    phone?: string;
 }
 
 @Injectable()
@@ -886,6 +888,38 @@ export class WhatsappService {
                 return null;
             }
 
+            // ─── Phone collection for Telegram (before payment) ───────────────
+            if (session.step === 'AWAITING_PHONE') {
+                let phone: string | null = null;
+
+                // Case 1: contact sharing via Telegram button (__phone__:XXXXXXXXXX)
+                if (normalizedMessage.startsWith('__phone__:')) {
+                    phone = normalizedMessage.replace('__phone__:', '').replace(/\D/g, '');
+                }
+                // Case 2: user typed number manually
+                else if (/^[6-9]\d{9}$/.test(normalizedMessage.replace(/\D/g, ''))) {
+                    phone = normalizedMessage.replace(/\D/g, '');
+                }
+
+                if (phone && /^[6-9]\d{9}$/.test(phone)) {
+                    session.phone = phone;
+                    const pricePerPage = session.color ? 10 : 2;
+                    // Recalculate price in case it was 0 from a stale session
+                    if (!session.price || session.price <= 0) {
+                        session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
+                    }
+                    session.step = 'AWAITING_PAYMENT';
+                    await this.saveSession(sender, session);
+                    await this.sendTypingIndicator(sender);
+                    return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
+                } else {
+                    // Invalid phone — re-ask
+                    await this.sendTypingIndicator(sender);
+                    await (this.resolveProvider(sender) as TelegramProvider).sendPhoneRequest(sender);
+                    return null;
+                }
+            }
+
             if (session.step === 'AWAITING_CONFIRMATION') {
                 const pricePerPage = session.color ? 10 : 2;
 
@@ -895,6 +929,22 @@ export class WhatsappService {
                 }
 
                 if (normalizedMessage.includes('confirm_pay') || normalizedMessage.includes('confirm') || normalizedMessage === 'pay' || normalizedMessage === 'yes') {
+                    // Always recalculate price — guards against stale sessions where price was 0
+                    if (!session.price || session.price <= 0) {
+                        session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
+                        this.logger.warn(`session.price was 0 — recalculated as ${session.price}`);
+                    }
+                    await this.saveSession(sender, session);
+
+                    // For Telegram users, collect phone number before payment (chat ID ≠ phone)
+                    if (sender.startsWith('telegram:') && !session.phone) {
+                        session.step = 'AWAITING_PHONE';
+                        await this.saveSession(sender, session);
+                        await this.sendTypingIndicator(sender);
+                        await (this.resolveProvider(sender) as TelegramProvider).sendPhoneRequest(sender);
+                        return null;
+                    }
+
                     // HCI: Status update — tell user payment link is being generated
                     await this.sendTypingIndicator(sender);
                     await this.sendTextMessage(sender, '⏳ Generating your payment link...');
@@ -1203,20 +1253,22 @@ export class WhatsappService {
             session.sender = sender;
             const paymentSource = sender.startsWith('telegram:') ? 'telegram' : 'whatsapp';
 
-            // For Telegram, the sender is a numeric chat ID — not a phone number.
-            // Payment gateways need a phone; use a placeholder so they don't receive 'null'.
-            let cleanedPhone = sender.replace(/^(whatsapp:|telegram:)/, '').replace('+', '');
+            // Prefer phone collected from user (e.g. Telegram contact share).
+            // Fall back to extracting from WhatsApp sender (strip +91 prefix).
+            let cleanedPhone = session.phone
+                || sender.replace(/^(whatsapp:|telegram:)/, '').replace('+', '').replace(/^91/, '');
             if (!/^[6-9]\d{9}$/.test(cleanedPhone)) {
-                // Not a valid Indian mobile number — substitute a gateway-safe placeholder
                 cleanedPhone = '9999999999';
-                this.logger.warn(`Sender ${sender} has no valid phone — using placeholder for payment gateway`);
+                this.logger.warn(`No valid phone for ${sender} — using placeholder for payment gateway`);
             }
 
-            // Guard: price must be a positive number before calling any gateway
-            const paymentAmount = session.price && session.price > 0 ? session.price : null;
-            if (!paymentAmount) {
-                throw new Error('Order total is ₹0 or not calculated. Please go back and re-confirm your order.');
+            // Guard: recalculate price if 0 rather than throwing (last-resort safety net)
+            if (!session.price || session.price <= 0) {
+                const ppp = session.color ? 10 : 2;
+                session.price = (session.pages || 1) * (session.copies || 1) * ppp;
+                this.logger.warn(`session.price was 0 in createPaymentLinksAndNotify — recalculated as ${session.price}`);
             }
+            const paymentAmount = session.price;
 
             await this.sendTypingIndicator(sender);
             const isColorStr = session.color ? 'Color' : 'Black and White';

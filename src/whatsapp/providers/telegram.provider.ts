@@ -120,6 +120,34 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
                 await ctx.answerCbQuery();
             } catch (e) { }
         });
+
+        // Handle contact sharing (phone number request response)
+        TelegramProvider.bot.on('contact', async (ctx: any) => {
+            const chatId = ctx.message?.chat?.id;
+            const phone = ctx.message?.contact?.phone_number;
+            if (!chatId || !phone) return;
+
+            const sender = `telegram:${chatId}`;
+            // Clean: strip leading + or country code prefix, normalize to 10-digit Indian number
+            const cleaned = phone.replace(/^\+?91/, '').replace(/\D/g, '');
+
+            // Feed into queue as a special message the AWAITING_PHONE handler recognises
+            await this.queueService.add('process-incoming', {
+                sender,
+                message: `__phone__:${cleaned}`,
+                mediaUrl: null,
+                mediaContentType: null,
+            });
+
+            // Dismiss the reply keyboard immediately after receiving contact
+            try {
+                await TelegramProvider.bot!.telegram.sendMessage(
+                    chatId,
+                    '✅ Phone number received! Generating your payment link...',
+                    { reply_markup: { remove_keyboard: true } } as any
+                );
+            } catch (e) { }
+        });
     }
 
     private formatTo(to: string): number {
@@ -143,6 +171,36 @@ export class TelegramProvider implements WhatsappProvider, OnModuleInit, OnModul
             );
         } catch (error: any) {
             this.logger.error(`Error sending shop selector to ${to}: ${error.message}`);
+        }
+    }
+
+    /**
+     * Ask a Telegram user to share their phone number.
+     * Sends a ReplyKeyboard with a single contact-request button.
+     * The bot receives the contact as a 'contact' update (handled in setupListeners).
+     */
+    async sendPhoneRequest(to: string): Promise<void> {
+        const chatId = this.formatTo(to);
+        if (isNaN(chatId) || !TelegramProvider.bot) return;
+        try {
+            await TelegramProvider.bot.telegram.sendMessage(
+                chatId,
+                '📱 *One last step!*\n\nWe need your phone number to generate the payment link.\n\nTap the button below to share it securely:',
+                {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        keyboard: [[{ text: '📱 Share My Phone Number', request_contact: true }]],
+                        resize_keyboard: true,
+                        one_time_keyboard: true,
+                    },
+                } as any
+            );
+        } catch (err: any) {
+            this.logger.error(`sendPhoneRequest failed: ${err.message}`);
+            // Fallback: ask them to type it
+            await this.sendTextMessage(to,
+                '📱 Please type your 10-digit mobile number so we can generate your payment link (e.g. 9876543210):'
+            );
         }
     }
 
