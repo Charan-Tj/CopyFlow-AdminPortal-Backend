@@ -59,9 +59,8 @@ export class WhatsappController {
         backoff: { type: 'exponential', delay: 2000 }
       });
       this.logger.log(`Added ${providerName} message from ${parsedData.sender} to queue`);
-    } else {
-      this.logger.warn(`Failed to parse ${providerName} webhook payload or sender missing`);
     }
+    // No warning needed — empty sender is expected for status updates, which are already logged at DEBUG level
 
     return `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`.trim();
   }
