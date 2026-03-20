@@ -541,6 +541,45 @@ export class KioskApiService {
   }
 
   private extractPrinters(rawPrinterList: unknown) {
+    // Handle new summary format
+    if (rawPrinterList && typeof rawPrinterList === 'object' && !Array.isArray(rawPrinterList)) {
+      const summary = rawPrinterList as any;
+      if (typeof summary.totalPrinters === 'number') {
+        const onlinePrinters = summary.onlinePrinters || 0;
+        const totalPrinters = summary.totalPrinters || 0;
+        const offlinePrinters = totalPrinters - onlinePrinters;
+        const minInkLevel = summary.minInkLevel !== null && summary.minInkLevel !== undefined
+          ? Math.round(summary.minInkLevel)
+          : null;
+
+        const printers = [];
+
+        // Create summary entries for online and offline printers
+        if (onlinePrinters > 0) {
+          printers.push({
+            name: onlinePrinters === 1 ? 'Printer' : `${onlinePrinters} Printers`,
+            printerStatus: 'ONLINE',
+            inkLevel: minInkLevel !== null ? minInkLevel : 100,
+            healthScore: 100,
+            icon: 'online-printer',
+          });
+        }
+
+        if (offlinePrinters > 0) {
+          printers.push({
+            name: offlinePrinters === 1 ? 'Offline Printer' : `${offlinePrinters} Offline Printers`,
+            printerStatus: 'OFFLINE',
+            inkLevel: 0,
+            healthScore: 0,
+            icon: 'offline-printer',
+          });
+        }
+
+        return printers;
+      }
+    }
+
+    // Handle old array format
     const list = Array.isArray(rawPrinterList) ? rawPrinterList : [];
     return list.map((printer: any) => {
       const healthScore = this.toNumber(
