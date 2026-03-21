@@ -298,7 +298,7 @@ export class WhatsappService {
                 }
 
                 if (session.step === 'AWAITING_CONFIRMATION') {
-                    const pricePerPage = session.color ? 10 : 2;
+                    const pricePerPage = this.calculatePricePerPage(session.color, session.sides);
                     const summary = this.generateOrderSummary(session, pricePerPage);
                     await this.sendContentMessage(sender, 'cf_order_confirm', { summary });
                     return null;
@@ -332,9 +332,10 @@ export class WhatsappService {
 
             // ─── /start slash command: welcome + shop selector ────────────────
             if (normalizedMessage === '/start' || normalizedMessage === 'start') {
+                const preservedPhone = session?.phone;
                 await this.deleteSession(sender);
                 const platform = sender.startsWith('telegram:') ? 'telegram' : sender.startsWith('whatsapp:') ? 'meta' : undefined;
-                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined, platform };
+                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined, platform, phone: preservedPhone };
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
 
@@ -374,9 +375,10 @@ export class WhatsappService {
 
             // ─── Global cancel/reset: works at ANY step ───────────────
             if (normalizedMessage === 'cancel' || normalizedMessage === 'reset' || normalizedMessage === 'restart' || normalizedMessage === '/cancel' || normalizedMessage === '/reset') {
+                const preservedPhone = session?.phone;
                 await this.deleteSession(sender);
                 const platform = sender.startsWith('telegram:') ? 'telegram' : sender.startsWith('whatsapp:') ? 'meta' : undefined;
-                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined, platform };
+                session = { step: 'AWAITING_FILE', files: [], startedAt: Date.now(), userName: String(userName || '').trim() || undefined, platform, phone: preservedPhone };
                 await this.saveSession(sender, session);
                 await this.sendTypingIndicator(sender);
 
@@ -530,7 +532,7 @@ export class WhatsappService {
                 session.copies = flowInput.copies ? parseInt(flowInput.copies, 10) : 1;
                 session.color = flowInput.color === 'true' || flowInput.color === true;
                 session.sides = flowInput.sides === 'double' ? 'double' : 'single';
-                const pricePerPage = session.color ? 10 : 2;
+                const pricePerPage = this.calculatePricePerPage(session.color, session.sides);
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
                 session.step = 'AWAITING_CONFIRMATION';
                 await this.saveSession(sender, session);
@@ -801,18 +803,26 @@ export class WhatsappService {
                     session.sides = 'double';
                     shouldUpdateMsg = true;
                 } else if (action === 'submit') {
-                    session.step = 'AWAITING_PHONE'; 
-                    const pricePerPage = session.color ? 10 : 2;
+                    const pricePerPage = this.calculatePricePerPage(session.color, session.sides);
                     session.price = (session.pages || 1) * safeCopies * pricePerPage;
-                    await this.saveSession(sender, session);
                     
                     if (msgId) {
                         await this.telegramProvider.sendSettingsMatrix(sender, safeCopies, !!session.color, session.sides === 'double', true, msgId, true);
                     }
                     
-                    await this.sendTypingIndicator(sender);
-                    await this.telegramProvider.sendPhoneRequest(sender);
-                    return null;
+                    if (session.phone) {
+                        await this.sendTypingIndicator(sender);
+                        await this.sendTextMessage(sender, 'Generating your payment link. This may take a few seconds...');
+                        session.step = 'AWAITING_PAYMENT';
+                        await this.saveSession(sender, session);
+                        return await this.createPaymentLinksAndNotify(session, sender, pricePerPage);
+                    } else {
+                        session.step = 'AWAITING_PHONE'; 
+                        await this.saveSession(sender, session);
+                        await this.sendTypingIndicator(sender);
+                        await this.telegramProvider.sendPhoneRequest(sender);
+                        return null;
+                    }
                 }
 
                 if (shouldUpdateMsg) {
@@ -936,7 +946,7 @@ export class WhatsappService {
                     return null;
                 }
 
-                const pricePerPage = session.color ? 10 : 2;
+                const pricePerPage = this.calculatePricePerPage(session.color, session.sides);
                 session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
                 session.step = 'AWAITING_CONFIRMATION';
                 await this.saveSession(sender, session);
@@ -966,7 +976,7 @@ export class WhatsappService {
 
                 if (phone && /^[6-9]\d{9}$/.test(phone)) {
                     session.phone = phone;
-                    const pricePerPage = session.color ? 10 : 2;
+                    const pricePerPage = this.calculatePricePerPage(session.color, session.sides);
                     // Recalculate price in case it was 0 from a stale session
                     if (!session.price || session.price <= 0) {
                         session.price = (session.pages || 1) * (session.copies || 1) * pricePerPage;
@@ -984,7 +994,7 @@ export class WhatsappService {
             }
 
             if (session.step === 'AWAITING_CONFIRMATION') {
-                const pricePerPage = session.color ? 10 : 2;
+                const pricePerPage = this.calculatePricePerPage(session.color, session.sides);
 
                 // Issue 6: kiosk was blocked — retry falls through to confirm logic
                 if (session.kioskBlockedAt && (normalizedMessage === 'retry' || normalizedMessage.includes('confirm'))) {
@@ -1249,6 +1259,13 @@ export class WhatsappService {
         return labels[step] || step;
     }
 
+    // Helper method to calculate price per page based on color and sides (duplex)
+    private calculatePricePerPage(color: boolean, sides: 'single' | 'double' = 'single'): number {
+        const basePrice = color ? 10 : 2;
+        const duplexSurcharge = sides === 'double' ? (color ? 10 : 1) : 0;
+        return basePrice + duplexSurcharge;
+    }
+
     // Issue 7: enhanced order summary with file names
     private generateOrderSummary(session: ChatState, pricePerPage: number): string {
         const fileCount = session.files?.length || 0;
@@ -1327,7 +1344,7 @@ export class WhatsappService {
 
             // Guard: recalculate price if 0 rather than throwing (last-resort safety net)
             if (!session.price || session.price <= 0) {
-                const ppp = session.color ? 10 : 2;
+                const ppp = this.calculatePricePerPage(session.color, session.sides);
                 session.price = (session.pages || 1) * (session.copies || 1) * ppp;
                 this.logger.warn(`session.price was 0 in createPaymentLinksAndNotify — recalculated as ${session.price}`);
             }
@@ -1540,8 +1557,18 @@ export class WhatsappService {
             );
             this.logger.log(`Successfully sent print confirmation to ${to}`);
 
-            // Only delete session after successful message delivery
-            await this.deleteSession(to);
+            // Only clear the active print payload, keep user identity
+            const newSession: ChatState = {
+                step: 'AWAITING_FILE',
+                files: [],
+                startedAt: Date.now(),
+                nodeId: session?.nodeId,
+                nodeCode: session?.nodeCode,
+                platform: session?.platform,
+                userName: session?.userName,
+                phone: session?.phone,
+            };
+            await this.saveSession(to, newSession);
             return true;
         } catch (error: any) {
             this.logger.error(`Failed to send WhatsApp confirmation. Error: ${error.message}`);

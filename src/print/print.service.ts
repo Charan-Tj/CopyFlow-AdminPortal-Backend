@@ -60,7 +60,10 @@ export class PrintService {
 
             // Create job record in database instead of just finding it, since WhatsApp flow doesn't create it beforehand.
             const isColor = jobData.color === true || String(jobData.color).toLowerCase() === 'true';
-            const pricePerPage = isColor ? 10 : 2;
+            const isDuplex = jobData.sides === 'double';
+            const basePrice = isColor ? 10 : 2;
+            const duplexSurcharge = isDuplex ? (isColor ? 10 : 1) : 0;
+            const pricePerPage = basePrice + duplexSurcharge;
             const safePages = Number.isFinite(Number(jobData.pages)) && Number(jobData.pages) > 0 ? Number(jobData.pages) : 1;
             const universalCopies = Number(jobData.copies || 1);
             const safeUniversalCopies = Number.isFinite(universalCopies) && universalCopies > 0 ? universalCopies : 1;

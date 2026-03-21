@@ -199,7 +199,10 @@ export class WebFormService {
 
         // Calculate price from live pricing config
         const pricing = await this.getPricing();
-        const pricePerPage = dto.color_mode === 'COLOR' ? pricing.color_price : pricing.bw_price;
+        const basePrice = dto.color_mode === 'COLOR' ? pricing.color_price : pricing.bw_price;
+        const isDuplex = dto.sides === 'double';
+        const duplexSurcharge = isDuplex ? (dto.color_mode === 'COLOR' ? 10 : 1) : 0;
+        const pricePerPage = basePrice + duplexSurcharge;
         const totalPrice = totalPages * dto.copies * pricePerPage;
 
         // Unique reference ID for this order
