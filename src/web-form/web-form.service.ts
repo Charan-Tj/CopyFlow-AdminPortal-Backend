@@ -18,7 +18,7 @@ interface MulterFile {
     buffer: Buffer;
     size: number;
 }
-const pdfParse = require('pdf-parse');
+import { countNonBlankPages } from '../utils/pdf-analyzer';
 import * as mammoth from 'mammoth';
 
 interface UploadedFileResult {
@@ -302,8 +302,8 @@ export class WebFormService {
         let pages = 1;
         try {
             if (mime.includes('pdf')) {
-                const data = await pdfParse(file.buffer);
-                pages = data.numpages || 1;
+                const { nonBlank } = await countNonBlankPages(file.buffer);
+                pages = nonBlank;
             } else if (mime.includes('word') || mime.includes('document')) {
                 const result = await mammoth.extractRawText({ buffer: file.buffer });
                 const wordCount = result.value.split(/\s+/).filter((w: string) => w.length > 0).length;
