@@ -11,7 +11,7 @@ import { TelegramProvider } from './providers/telegram.provider';
 import { MetaProvider } from './providers/meta.provider';
 import { TwilioProvider } from './providers/twilio.provider';
 import { evaluateKioskStatus } from '../node/kiosk-status.util';
-const pdfParse = require('pdf-parse');
+import { countNonBlankPages } from '../utils/pdf-analyzer';
 
 interface UploadedFile {
     url: string;
@@ -239,8 +239,8 @@ export class WhatsappService {
 
             let pages = 1;
             if (mime.includes('pdf')) {
-                const data = await pdfParse(buffer);
-                pages = data.numpages || 1;
+                const { nonBlank } = await countNonBlankPages(buffer);
+                pages = nonBlank;
             } else if (mime.includes('word') || mime.includes('document')) {
                 const result = await mammoth.extractRawText({ buffer });
                 const wordCount = result.value.split(/\s+/).filter(w => w.length > 0).length;
