@@ -117,19 +117,13 @@ export function evaluateKioskStatus(
 
   const heartbeatFresh = heartbeatAgeMs !== null && heartbeatAgeMs <= onlineWindowMs;
   const isOnline = runtimeStatus !== 'OFFLINE' && heartbeatFresh;
-  const paperOk = paperLevel !== 'LOW';
-  const printersOk = online > 0;
-  const isPrintingReady = isOnline && paperOk && printersOk;
+  const isPrintingReady = runtimeStatus === 'ONLINE' && heartbeatFresh;
 
   let reason = 'READY';
   if (!heartbeatFresh) {
     reason = 'No recent kiosk heartbeat';
-  } else if (runtimeStatus === 'OFFLINE') {
-    reason = 'Kiosk runtime status is OFFLINE';
-  } else if (!paperOk) {
-    reason = 'Kiosk paper/supplies level is LOW';
-  } else if (!printersOk) {
-    reason = 'No online printers reported by kiosk';
+  } else if (runtimeStatus !== 'ONLINE') {
+    reason = `Kiosk not ready. Reported status: ${runtimeStatus}`;
   }
 
   return {

@@ -203,8 +203,7 @@ export class NodeService {
                 data: {
                     last_heartbeat: eventTime,
                     printer_list: printerData,
-                    paper_level: hasLowConsumables ? 'LOW' : 'HIGH',
-                    runtime_status: deriveRuntimeStatus(hasLowConsumables ? 'LOW' : 'HIGH', printerData)
+                    paper_level: hasLowConsumables ? 'LOW' : 'HIGH'
                 }
             });
         }
